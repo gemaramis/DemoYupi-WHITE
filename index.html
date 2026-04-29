@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>AR Penalty Shootout – DemoYupi</title>
+  <meta name="description" content="WebAR Penalty Shootout game powered by Three.js and MindAR. Swipe to shoot and score goals in Augmented Reality!" />
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+
+  <!-- THREE.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <!-- MindAR CDN (Three.js integration) -->
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== LOADING SCREEN ===== -->
+  <div id="loading-screen">
+    <div class="loader-inner">
+      <div class="loader-ball"></div>
+      <p class="loader-title">AR PENALTY</p>
+      <p class="loader-sub">SHOOTOUT</p>
+      <div class="loader-bar-wrap"><div class="loader-bar" id="loader-bar"></div></div>
+      <p class="loader-hint" id="loader-hint">Initialising camera…</p>
+    </div>
+  </div>
+
+  <!-- ===== START SCREEN ===== -->
+  <div id="start-screen" class="hidden">
+    <div class="start-card">
+      <div class="start-logo">⚽</div>
+      <h1 class="start-title">AR PENALTY<br/><span>SHOOTOUT</span></h1>
+      <p class="start-desc">Point camera at your target,<br/>then <strong>swipe</strong> to shoot!</p>
+      <button id="btn-start" class="btn-primary">PLAY NOW</button>
+      <p class="start-note">Allow camera access when prompted</p>
+    </div>
+  </div>
+
+  <!-- ===== HUD ===== -->
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <div class="hud-score">
+        <span class="hud-label">GOALS</span>
+        <span class="hud-value" id="hud-goals">0</span>
+      </div>
+      <div class="hud-timer-wrap">
+        <div class="hud-timer" id="hud-timer">5</div>
+        <div class="hud-timer-label">shots left</div>
+      </div>
+      <div class="hud-score">
+        <span class="hud-label">SAVES</span>
+        <span class="hud-value" id="hud-saves">0</span>
+      </div>
+    </div>
+    <div id="swipe-hint" class="swipe-hint">
+      <div class="swipe-arrow">↑</div>
+      <p>Swipe Up to Shoot</p>
+    </div>
+  </div>
+
+  <!-- ===== FEEDBACK OVERLAY ===== -->
+  <div id="feedback" class="feedback hidden">
+    <span id="feedback-text"></span>
+  </div>
+
+  <!-- ===== GAME OVER SCREEN ===== -->
+  <div id="gameover-screen" class="hidden">
+    <div class="gameover-card">
+      <div class="gameover-emoji" id="gameover-emoji">🏆</div>
+      <h2 class="gameover-title" id="gameover-title">FULL TIME!</h2>
+      <div class="gameover-score-wrap">
+        <div class="gameover-score-box">
+          <span class="gameover-score-num" id="go-goals">0</span>
+          <span class="gameover-score-lbl">GOALS</span>
+        </div>
+        <span class="gameover-vs">/</span>
+        <div class="gameover-score-box">
+          <span class="gameover-score-num" id="go-shots">5</span>
+          <span class="gameover-score-lbl">SHOTS</span>
+        </div>
+      </div>
+      <p class="gameover-rating" id="gameover-rating"></p>
+      <button id="btn-restart" class="btn-primary">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <!-- ===== AR CANVAS (injected by MindAR) ===== -->
+  <div id="ar-container"></div>
+
+  <script src="game.js"></script>
+</body>
+</html>
