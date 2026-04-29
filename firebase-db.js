@@ -1,15 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
 import { getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp, updateDoc, doc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 
-// TODO: Replace this placeholder config with your actual Firebase project config
-// Find this in Firebase Console > Project Settings > General > Your apps
+// Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "REPLACE_WITH_API_KEY",
-  authDomain: "REPLACE_WITH_AUTH_DOMAIN",
-  projectId: "REPLACE_WITH_PROJECT_ID",
-  storageBucket: "REPLACE_WITH_STORAGE_BUCKET",
-  messagingSenderId: "REPLACE_WITH_MESSAGING_SENDER_ID",
-  appId: "REPLACE_WITH_APP_ID"
+  apiKey: "AIzaSyDhG6OGZOZBpfU7zHMwUyafxBZa_eX6Jeg",
+  authDomain: "yupidemo-white.firebaseapp.com",
+  projectId: "yupidemo-white",
+  storageBucket: "yupidemo-white.firebasestorage.app",
+  messagingSenderId: "568162275709",
+  appId: "1:568162275709:web:ca95b79a9dd1c993b47c14",
+  measurementId: "G-NKK1PF69ZW"
 };
 
 // Initialize Firebase only if the config is not the placeholder
@@ -31,35 +31,23 @@ if (isConfigured) {
 // Global player state
 export const PlayerState = {
   docId: null,
-  code: null,
   name: null,
-  email: null,
-  phone: null,
-  score: 0,
-  timeTaken: 0, // Lower is better for tie-breaking
+  points: 0
 };
 
 /**
  * Registers a new player session in Firestore.
  */
-export async function registerPlayer(code, name, email, phone) {
-  PlayerState.code = code;
+export async function registerPlayer(name) {
   PlayerState.name = name;
-  PlayerState.email = email;
-  PlayerState.phone = phone;
-  PlayerState.score = 0;
-  PlayerState.timeTaken = 0;
+  PlayerState.points = 0;
 
   if (!isConfigured || !db) return { success: false, error: "Firebase not configured" };
 
   try {
     const docRef = await addDoc(collection(db, "leaderboard"), {
-      code: code,
       name: name,
-      email: email,
-      phone: phone,
-      score: 0,
-      timeTaken: 0,
+      points: 0,
       timestamp: serverTimestamp()
     });
     PlayerState.docId = docRef.id;
@@ -73,17 +61,15 @@ export async function registerPlayer(code, name, email, phone) {
 /**
  * Updates the player's final score in Firestore.
  */
-export async function saveScore(score, timeTaken) {
-  PlayerState.score = score;
-  PlayerState.timeTaken = timeTaken;
+export async function saveScore(points) {
+  PlayerState.points = points;
 
   if (!isConfigured || !db || !PlayerState.docId) return { success: false };
 
   try {
     const playerRef = doc(db, "leaderboard", PlayerState.docId);
     await updateDoc(playerRef, {
-      score: score,
-      timeTaken: timeTaken,
+      points: points,
       completedAt: serverTimestamp()
     });
     return { success: true };
@@ -95,7 +81,7 @@ export async function saveScore(score, timeTaken) {
 
 /**
  * Fetches the top 500 leaderboard.
- * Sorts by score (descending) and then timeTaken (ascending).
+ * Sorts by points (descending).
  */
 export async function fetchLeaderboard() {
   if (!isConfigured || !db) return []; // Return empty array if not configured
@@ -103,8 +89,7 @@ export async function fetchLeaderboard() {
   try {
     const q = query(
       collection(db, "leaderboard"),
-      orderBy("score", "desc"),
-      orderBy("timeTaken", "asc"),
+      orderBy("points", "desc"),
       limit(500)
     );
     

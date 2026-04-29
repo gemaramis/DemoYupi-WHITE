@@ -35,20 +35,11 @@
       <span class="logo-y">Y</span><span class="logo-u">u</span><span class="logo-p">p</span><span class="logo-i">i</span>
     </div>
     <div class="start-subtitle">WORLD CUP AR</div>
-    <p class="reg-desc">ENTER YOUR CODE</p>
-    <input type="text" id="reg-code" class="reg-input" placeholder="Unique Code (e.g. YWC25-7X9B)" />
-    <p class="reg-desc">YOUR DETAILS</p>
-    <input type="text" id="reg-name" class="reg-input" placeholder="Full Name" />
-    <input type="email" id="reg-email" class="reg-input" placeholder="Email" />
-    <input type="tel" id="reg-phone" class="reg-input" placeholder="Phone Number" />
+    <p class="reg-desc">ENTER NICKNAME</p>
+    <input type="text" id="reg-name" class="reg-input" placeholder="Your Nickname" />
     
-    <label class="reg-checkbox-label">
-      <input type="checkbox" id="reg-agree" />
-      <span>I agree to the terms & conditions</span>
-    </label>
-    
-    <button id="btn-submit-reg" class="yupi-btn yupi-btn-yellow">
-      <span>SUBMIT</span>
+    <button id="btn-submit-reg" class="yupi-btn yupi-btn-yellow" style="margin-top: 12px;">
+      <span>START GAME</span>
     </button>
   </div>
 </div>
@@ -76,21 +67,21 @@
   <!-- Top score bar -->
   <div class="hud-scorebar">
     <div class="hud-team hud-team-left">
-      <span class="hud-team-name">YUPI</span>
+      <span class="hud-team-name">POINTS</span>
       <span class="hud-team-score" id="score-you">0</span>
     </div>
     <div class="hud-center-label">VS</div>
     <div class="hud-team hud-team-right">
       <span class="hud-team-score" id="score-candy">0</span>
-      <span class="hud-team-name">CANDY</span>
+      <span class="hud-team-name">SAVES</span>
     </div>
   </div>
 
   <!-- Mode label -->
-  <div class="hud-goalie-label">GOALIE</div>
+  <div class="hud-goalie-label" id="hud-timer">60s</div>
 
-  <!-- Shots remaining -->
-  <div class="hud-shots-row">
+  <!-- Removed Shots remaining block entirely since we use timer -->
+  <div class="hud-shots-row screen-hidden">
     <div class="hud-shots-label">SHOTS LEFT</div>
     <div class="hud-shots-pips" id="shots-pips"></div>
   </div>
@@ -131,12 +122,12 @@
     <div class="go-scoreboard">
       <div class="go-score-block">
         <div class="go-score-num" id="go-goals">0</div>
-        <div class="go-score-lbl">GOALS</div>
+        <div class="go-score-lbl">POINTS</div>
       </div>
       <div class="go-divider">/</div>
       <div class="go-score-block">
-        <div class="go-score-num" id="go-total">5</div>
-        <div class="go-score-lbl">SHOTS</div>
+        <div class="go-score-num" id="go-total">0</div>
+        <div class="go-score-lbl">GOALS</div>
       </div>
     </div>
     <div class="go-rating" id="go-rating"></div>

@@ -8,7 +8,8 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from "./fire
 
 /* ── CONFIG ── */
 const CFG = {
-  SHOTS: 5,
+  TIME_LIMIT: 60,
+  POINTS_PER_GOAL: 100,
   GOAL_W: 3.8, GOAL_H: 2.2, GOAL_Z: -7,
   BALL_Y: 0.22, BALL_Z: 0,
   KEEPER_RANGE: 1.5, KEEPER_SPEED: 0.03,
@@ -17,7 +18,7 @@ const CFG = {
 };
 
 /* ── STATE ── */
-const S = { goals:0, saves:0, shots:CFG.SHOTS, shooting:false, active:false, aimX:0 };
+const S = { goals:0, saves:0, points:0, timeRemaining:CFG.TIME_LIMIT, shooting:false, active:false, aimX:0 };
 
 /* ── DOM ── */
 const $ = id => document.getElementById(id);
@@ -29,10 +30,11 @@ const El = {
   scoreYou: $('score-you'), scoreCandy: $('score-candy'),
   shotsPips: $('shots-pips'), goGoals: $('go-goals'),
   goTotal: $('go-total'), goTitle: $('go-title'), goRating: $('go-rating'),
+  hudTimer: $('hud-timer'),
   
   // Registration
   regScreen: $('registration-screen'), btnReg: $('btn-submit-reg'),
-  regCode: $('reg-code'), regName: $('reg-name'), regEmail: $('reg-email'), regPhone: $('reg-phone'), regAgree: $('reg-agree'),
+  regName: $('reg-name'),
   
   // Leaderboard
   lbScreen: $('leaderboard-screen'), lbList: $('lb-list'), lbMyRow: $('lb-my-row'), btnCloseLb: $('btn-close-lb')
@@ -308,7 +310,7 @@ function updateAimIndicator() {
 }
 
 function shoot() {
-  if (!S.active || S.shooting || S.shots <= 0) return;
+  if (!S.active || S.shooting || S.timeRemaining <= 0) return;
   S.shooting = true;
 
   const tx = S.aimX;
@@ -335,9 +337,6 @@ function shoot() {
    COLLISION
 ════════════════════════════════════════ */
 function resolveShot(bx, by) {
-  S.shots--;
-  updatePips();
-
   const kx = keeper.position.x;
   const saved = Math.abs(bx-kx) < 0.88 && Math.abs(by - CFG.GOAL_H/2) < CFG.GOAL_H/2+0.2;
   const goal  = !saved && Math.abs(bx) < CFG.GOAL_W/2 && by>0.05 && by<CFG.GOAL_H+0.1;
@@ -348,7 +347,8 @@ function resolveShot(bx, by) {
     showFeedback('😅','SAVED!','saved');
   } else if (goal) {
     S.goals++;
-    El.scoreYou.textContent = S.goals;
+    S.points += CFG.POINTS_PER_GOAL;
+    El.scoreYou.textContent = S.points;
     El.scoreYou.classList.remove('pop');
     void El.scoreYou.offsetWidth;
     El.scoreYou.classList.add('pop');
@@ -362,7 +362,6 @@ function resolveShot(bx, by) {
     ball.rotation.set(0,0,0);
     S.aimX = 0; updateAimIndicator();
     S.shooting = false;
-    if (S.shots <= 0) setTimeout(endGame, 600);
   }, 1000);
 }
 
@@ -379,31 +378,42 @@ function showFeedback(emoji, text, cls) {
 }
 
 /* ════════════════════════════════════════
-   HUD
+   HUD & TIMER
 ════════════════════════════════════════ */
-function updatePips() {
-  El.shotsPips.innerHTML = '';
-  for (let i=0; i<CFG.SHOTS; i++) {
-    const d = document.createElement('div');
-    d.className = 'shot-pip' + (i >= S.shots ? ' used' : '');
-    El.shotsPips.appendChild(d);
-  }
+let gameTimerInterval = null;
+
+function updateTimerDisplay() {
+  El.hudTimer.textContent = S.timeRemaining + 's';
+  if (S.timeRemaining <= 10) El.hudTimer.style.color = '#FF5252';
+  else El.hudTimer.style.color = '#fff';
 }
 
 /* ════════════════════════════════════════
    GAME FLOW
 ════════════════════════════════════════ */
 function startGame() {
-  Object.assign(S, { goals:0, saves:0, shots:CFG.SHOTS, shooting:false, active:true, aimX:0 });
+  Object.assign(S, { goals:0, saves:0, points:0, timeRemaining:CFG.TIME_LIMIT, shooting:false, active:true, aimX:0 });
   El.scoreYou.textContent = 0; El.scoreCandy.textContent = 0;
   ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z); ball.rotation.set(0,0,0);
   keeperTimer = 0; keeper.position.x = 0; keeperTarget = 0;
-  updatePips(); updateAimIndicator();
+  updateAimIndicator(); updateTimerDisplay();
 
   El.start.classList.add('screen-hidden');
   El.gameover.classList.add('screen-hidden');
   El.hud.classList.remove('screen-hidden');
   El.aim.classList.remove('screen-hidden');
+
+  clearInterval(gameTimerInterval);
+  gameTimerInterval = setInterval(() => {
+    if (!S.active) return clearInterval(gameTimerInterval);
+    S.timeRemaining--;
+    updateTimerDisplay();
+    if (S.timeRemaining <= 0) {
+      clearInterval(gameTimerInterval);
+      if (!S.shooting) endGame();
+      else setTimeout(endGame, 1200); // Wait for the last shot to resolve
+    }
+  }, 1000);
 }
 
 function endGame() {
@@ -412,17 +422,16 @@ function endGame() {
   El.aim.classList.add('screen-hidden');
   El.gameover.classList.remove('screen-hidden');
 
-  El.goGoals.textContent = S.goals;
-  El.goTotal.textContent = CFG.SHOTS;
+  El.goGoals.textContent = S.points;
+  El.goTotal.textContent = S.goals;
 
-  const pct = S.goals/CFG.SHOTS;
-  if      (pct===1)   { El.goTitle.textContent='PERFECT!';    El.goRating.textContent='🏆 WORLD CLASS STRIKER'; }
-  else if (pct>=0.6)  { El.goTitle.textContent='GREAT JOB!';  El.goRating.textContent='⭐ PRO LEVEL'; }
-  else if (pct>=0.4)  { El.goTitle.textContent='NOT BAD!';    El.goRating.textContent='👟 KEEP KICKING'; }
-  else                { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
+  if      (S.goals>=10) { El.goTitle.textContent='PERFECT!';    El.goRating.textContent='🏆 WORLD CLASS STRIKER'; }
+  else if (S.goals>=6)  { El.goTitle.textContent='GREAT JOB!';  El.goRating.textContent='⭐ PRO LEVEL'; }
+  else if (S.goals>=3)  { El.goTitle.textContent='NOT BAD!';    El.goRating.textContent='👟 KEEP KICKING'; }
+  else                  { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
 
-  // Save to Firebase (timeTaken logic could be added here if we track duration)
-  saveScore(S.goals, 0); 
+  // Save to Firebase
+  saveScore(S.points); 
 }
 
 /* ════════════════════════════════════════
@@ -453,19 +462,18 @@ async function boot() {
 
 /* ── Registration Logic ── */
 El.btnReg.onclick = async () => {
-  const code = El.regCode.value.trim();
   const name = El.regName.value.trim();
-  if (!code || !name || !El.regAgree.checked) {
-    alert("Please enter your Code, Name, and agree to the terms.");
+  if (!name) {
+    alert("Please enter a nickname.");
     return;
   }
-  El.btnReg.textContent = "REGISTERING...";
+  El.btnReg.textContent = "LOADING...";
   El.btnReg.disabled = true;
   
-  await registerPlayer(code, name, El.regEmail.value.trim(), El.regPhone.value.trim());
+  await registerPlayer(name);
   
   El.regScreen.classList.add('screen-hidden');
-  El.start.classList.remove('screen-hidden');
+  startGame(); // Automatically start instead of going to start screen
 };
 
 /* ── Leaderboard Logic ── */
@@ -492,7 +500,7 @@ $('btn-leaderboard').onclick = async () => {
     row.innerHTML = `
       <span class="lb-col-rank">${rank}</span>
       <span class="lb-col-player">${entry.name || 'Anonymous'}</span>
-      <span class="lb-col-score">${entry.score}</span>
+      <span class="lb-col-score">${entry.points || 0}</span>
     `;
     if (isMe) row.style.backgroundColor = 'rgba(247,201,72,0.15)';
     El.lbList.appendChild(row);
