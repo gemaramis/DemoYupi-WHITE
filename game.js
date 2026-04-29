@@ -4,6 +4,8 @@
  */
 "use strict";
 
+import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from "./firebase-db.js";
+
 /* ── CONFIG ── */
 const CFG = {
   SHOTS: 5,
@@ -27,6 +29,13 @@ const El = {
   scoreYou: $('score-you'), scoreCandy: $('score-candy'),
   shotsPips: $('shots-pips'), goGoals: $('go-goals'),
   goTotal: $('go-total'), goTitle: $('go-title'), goRating: $('go-rating'),
+  
+  // Registration
+  regScreen: $('registration-screen'), btnReg: $('btn-submit-reg'),
+  regCode: $('reg-code'), regName: $('reg-name'), regEmail: $('reg-email'), regPhone: $('reg-phone'), regAgree: $('reg-agree'),
+  
+  // Leaderboard
+  lbScreen: $('leaderboard-screen'), lbList: $('lb-list'), lbMyRow: $('lb-my-row'), btnCloseLb: $('btn-close-lb')
 };
 
 /* ── THREE ── */
@@ -411,6 +420,9 @@ function endGame() {
   else if (pct>=0.6)  { El.goTitle.textContent='GREAT JOB!';  El.goRating.textContent='⭐ PRO LEVEL'; }
   else if (pct>=0.4)  { El.goTitle.textContent='NOT BAD!';    El.goRating.textContent='👟 KEEP KICKING'; }
   else                { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
+
+  // Save to Firebase (timeTaken logic could be added here if we track duration)
+  saveScore(S.goals, 0); 
 }
 
 /* ════════════════════════════════════════
@@ -436,8 +448,61 @@ async function boot() {
   await initScene();
   await new Promise(r=>setTimeout(r,400));
   El.splash.classList.add('screen-hidden');
-  El.start.classList.remove('screen-hidden');
+  El.regScreen.classList.remove('screen-hidden');
 }
+
+/* ── Registration Logic ── */
+El.btnReg.onclick = async () => {
+  const code = El.regCode.value.trim();
+  const name = El.regName.value.trim();
+  if (!code || !name || !El.regAgree.checked) {
+    alert("Please enter your Code, Name, and agree to the terms.");
+    return;
+  }
+  El.btnReg.textContent = "REGISTERING...";
+  El.btnReg.disabled = true;
+  
+  await registerPlayer(code, name, El.regEmail.value.trim(), El.regPhone.value.trim());
+  
+  El.regScreen.classList.add('screen-hidden');
+  El.start.classList.remove('screen-hidden');
+};
+
+/* ── Leaderboard Logic ── */
+$('btn-leaderboard').onclick = async () => {
+  El.lbScreen.classList.remove('screen-hidden');
+  El.lbList.innerHTML = '<div class="lb-loading">Loading scores...</div>';
+  
+  const scores = await fetchLeaderboard();
+  
+  if (scores.length === 0) {
+    El.lbList.innerHTML = '<div class="lb-loading">No scores yet or Firebase not configured.</div>';
+    return;
+  }
+  
+  El.lbList.innerHTML = '';
+  let myRankHTML = '<span class="lb-col-rank">-</span><span class="lb-col-player">-</span><span class="lb-col-score">-</span>';
+  
+  scores.forEach((entry, index) => {
+    const rank = index + 1;
+    const isMe = entry.id === PlayerState.docId;
+    
+    const row = document.createElement('div');
+    row.className = 'lb-row';
+    row.innerHTML = `
+      <span class="lb-col-rank">${rank}</span>
+      <span class="lb-col-player">${entry.name || 'Anonymous'}</span>
+      <span class="lb-col-score">${entry.score}</span>
+    `;
+    if (isMe) row.style.backgroundColor = 'rgba(247,201,72,0.15)';
+    El.lbList.appendChild(row);
+    
+    if (isMe) myRankHTML = row.innerHTML;
+  });
+  
+  El.lbMyRow.innerHTML = myRankHTML;
+};
+El.btnCloseLb.onclick = () => El.lbScreen.classList.add('screen-hidden');
 
 /* ── Controls ── */
 $('btn-start').onclick    = startGame;
@@ -445,7 +510,6 @@ $('btn-restart').onclick  = startGame;
 $('btn-left').onclick     = aimLeft;
 $('btn-right').onclick    = aimRight;
 $('btn-shoot').onclick    = shoot;
-$('btn-leaderboard').onclick = () => alert('🏆 Leaderboard coming soon!\nTop 500 win Rp 5.000 weekly!');
 
 /* Touch hold for continuous aim */
 let aimHold = null;

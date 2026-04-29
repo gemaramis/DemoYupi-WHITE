@@ -27,6 +27,32 @@
   </div>
 </div>
 
+<!-- ===== REGISTRATION SCREEN ===== -->
+<div id="registration-screen" class="screen-hidden">
+  <div class="start-bg"></div>
+  <div class="reg-card">
+    <div class="reg-logo-wrap">
+      <span class="logo-y">Y</span><span class="logo-u">u</span><span class="logo-p">p</span><span class="logo-i">i</span>
+    </div>
+    <div class="start-subtitle">WORLD CUP AR</div>
+    <p class="reg-desc">ENTER YOUR CODE</p>
+    <input type="text" id="reg-code" class="reg-input" placeholder="Unique Code (e.g. YWC25-7X9B)" />
+    <p class="reg-desc">YOUR DETAILS</p>
+    <input type="text" id="reg-name" class="reg-input" placeholder="Full Name" />
+    <input type="email" id="reg-email" class="reg-input" placeholder="Email" />
+    <input type="tel" id="reg-phone" class="reg-input" placeholder="Phone Number" />
+    
+    <label class="reg-checkbox-label">
+      <input type="checkbox" id="reg-agree" />
+      <span>I agree to the terms & conditions</span>
+    </label>
+    
+    <button id="btn-submit-reg" class="yupi-btn yupi-btn-yellow">
+      <span>SUBMIT</span>
+    </button>
+  </div>
+</div>
+
 <!-- ===== START SCREEN ===== -->
 <div id="start-screen" class="screen-hidden">
   <div class="start-bg"></div>
@@ -131,6 +157,36 @@
   <div class="aim-ring"></div>
 </div>
 
-<script src="game.js"></script>
+<!-- ===== LEADERBOARD SCREEN ===== -->
+<div id="leaderboard-screen" class="screen-hidden">
+  <div class="lb-bg"></div>
+  <div class="lb-card">
+    <div class="lb-header">
+      <span class="lb-icon">🏆</span> LEADERBOARD
+      <button id="btn-close-lb" class="lb-close">✖</button>
+    </div>
+    <div class="lb-table-header">
+      <span class="lb-col-rank">RANK</span>
+      <span class="lb-col-player">PLAYER</span>
+      <span class="lb-col-score">SCORE</span>
+    </div>
+    <div class="lb-list" id="lb-list">
+      <div class="lb-loading">Loading scores...</div>
+    </div>
+    <div class="lb-your-rank">
+      <div class="lb-rank-label">YOUR RANK</div>
+      <div class="lb-rank-row" id="lb-my-row">
+        <span class="lb-col-rank">-</span>
+        <span class="lb-col-player">-</span>
+        <span class="lb-col-score">-</span>
+      </div>
+    </div>
+    <div class="lb-footer-note">TOP 500 WIN Rp 5.000! EVERY WEEK!</div>
+  </div>
+</div>
+
+<!-- Firebase SDKs -->
+<script type="module" src="firebase-db.js"></script>
+<script type="module" src="game.js"></script>
 </body>
 </html>
