@@ -1,568 +1,458 @@
 /**
- * AR PENALTY SHOOTOUT – game.js
- * Senior WebXR Developer build using Three.js + MindAR.js (CDN)
+ * YUPI AR PENALTY SHOOTOUT — game.js
+ * Three.js | Ground-placed AR | Yupi branding
  */
-
 "use strict";
 
-/* ─── CONFIG ─────────────────────────────────────────── */
-const TOTAL_SHOTS   = 5;
-const KEEPER_SPEED  = 0.025;
-const KEEPER_RANGE  = 1.4;
-const BALL_TRAVEL   = 0.75;  // seconds for ball to reach goal
-const GOAL_W        = 3.6;
-const GOAL_H        = 2.2;
-const GOAL_DEPTH    = 0.6;
-const GOAL_Z        = -8;
-const BALL_START_Z  = 0;
-const BALL_START_Y  = -1.0;
-
-/* ─── STATE ──────────────────────────────────────────── */
-const state = {
-  goals: 0, saves: 0,
-  shotsLeft: TOTAL_SHOTS,
-  shooting: false,
-  gameActive: false,
-  keeperDir: 1,
+/* ── CONFIG ── */
+const CFG = {
+  SHOTS: 5,
+  GOAL_W: 3.8, GOAL_H: 2.2, GOAL_Z: -7,
+  BALL_Y: 0.22, BALL_Z: 0,
+  KEEPER_RANGE: 1.5, KEEPER_SPEED: 0.03,
+  AIM_STEP: 0.35, MAX_AIM: 1.7,
+  SHOOT_MS: 700,
 };
 
-/* ─── DOM refs ───────────────────────────────────────── */
+/* ── STATE ── */
+const S = { goals:0, saves:0, shots:CFG.SHOTS, shooting:false, active:false, aimX:0 };
+
+/* ── DOM ── */
 const $ = id => document.getElementById(id);
-const loadingScreen  = $('loading-screen');
-const startScreen    = $('start-screen');
-const hudEl          = $('hud');
-const feedbackEl     = $('feedback');
-const feedbackText   = $('feedback-text');
-const gameoverScreen = $('gameover-screen');
-const loaderBar      = $('loader-bar');
-const loaderHint     = $('loader-hint');
-const swipeHint      = $('swipe-hint');
+const El = {
+  splash: $('splash'), splashBar: $('splash-bar'), splashHint: $('splash-hint'),
+  start: $('start-screen'), hud: $('hud'), feedback: $('feedback'),
+  fbEmoji: $('feedback-emoji'), fbText: $('feedback-text'),
+  gameover: $('gameover'), aim: $('aim-indicator'),
+  scoreYou: $('score-you'), scoreCandy: $('score-candy'),
+  shotsPips: $('shots-pips'), goGoals: $('go-goals'),
+  goTotal: $('go-total'), goTitle: $('go-title'), goRating: $('go-rating'),
+};
 
-/* ─── THREE.js objects (set later) ──────────────────── */
-let scene, camera, renderer;
-let ball, keeper, goalMesh;
-let ballAnimId = null;
-let keeperAnimId = null;
+/* ── THREE ── */
+let renderer, scene, camera, ball, keeper, keeperTarget = 0, keeperTimer = 0;
+const texLoader = new THREE.TextureLoader();
 
-/* ═══════════════════════════════════════════════════════
-   LOADER PROGRESS ANIMATION
-════════════════════════════════════════════════════════ */
-function animateLoader(pct, hint) {
-  loaderBar.style.width = pct + '%';
-  if (hint) loaderHint.textContent = hint;
-}
-
-/* ═══════════════════════════════════════════════════════
-   BUILD THREE.JS SCENE (no MindAR target needed)
-   Camera feed rendered as background via getUserMedia
-════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════
+   SCENE INIT
+════════════════════════════════════════ */
 async function initScene() {
-  /* ── Renderer ── */
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   $('ar-container').appendChild(renderer.domElement);
 
-  /* ── Camera (1st-person, fixed) ── */
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 0, 0);
+  camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 100);
+  camera.position.set(0, 1.6, 3.5);
+  camera.lookAt(0, 1, CFG.GOAL_Z);
 
-  /* ── Scene ── */
   scene = new THREE.Scene();
 
-  /* ── Camera feed as background ── */
-  await setupCameraBackground();
+  // Camera background (real-world AR)
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }, audio:false
+    });
+    const vid = Object.assign(document.createElement('video'), { srcObject:stream, playsInline:true, muted:true });
+    await vid.play();
+    const vt = new THREE.VideoTexture(vid);
+    vt.minFilter = THREE.LinearFilter;
+    scene.background = vt;
+  } catch(e) {
+    scene.background = new THREE.Color(0x0a1020);
+  }
 
-  /* ── Lights ── */
-  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-  scene.add(ambient);
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(3, 10, 3); sun.castShadow = true;
+  sun.shadow.mapSize.set(1024,1024); scene.add(sun);
+  scene.add(Object.assign(new THREE.PointLight(0x4488ff, 0.6, 20), { position: new THREE.Vector3(-3,4,-3) }));
 
-  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-  dirLight.position.set(4, 10, 4);
-  dirLight.castShadow = true;
-  dirLight.shadow.camera.near = 0.5;
-  dirLight.shadow.camera.far  = 50;
-  dirLight.shadow.mapSize.set(1024, 1024);
-  scene.add(dirLight);
+  buildGround(); buildGoal(); buildBall(); buildKeeper();
+  addYupiBanner(); addStadiumSprites();
 
-  const fillLight = new THREE.PointLight(0x00b4ff, 0.8, 20);
-  fillLight.position.set(-3, 3, -4);
-  scene.add(fillLight);
-
-  /* ── Build meshes ── */
-  buildGoal();
-  buildBall();
-  buildKeeper();
-  buildGround();
-
-  /* ── Resize handler ── */
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.aspect = innerWidth/innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(innerWidth, innerHeight);
   });
 
-  /* ── Start render loop ── */
   renderLoop();
 }
 
-/* ─── Camera background via getUserMedia ─────────────── */
-async function setupCameraBackground() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.playsInline = true;
-    video.muted = true;
-    await video.play();
+/* ── Ground ── */
+function buildGround() {
+  // Grass base
+  const grass = new THREE.Mesh(
+    new THREE.PlaneGeometry(20, 20),
+    new THREE.MeshLambertMaterial({ color:0x2e7d32, transparent:true, opacity:0.85 })
+  );
+  grass.rotation.x = -Math.PI/2; grass.position.y = 0; grass.receiveShadow = true;
+  scene.add(grass);
 
-    const videoTexture = new THREE.VideoTexture(video);
-    videoTexture.minFilter = THREE.LinearFilter;
-    videoTexture.magFilter = THREE.LinearFilter;
-    scene.background = videoTexture;
-  } catch (e) {
-    // Fallback: dark gradient background
-    scene.background = new THREE.Color(0x0a0e1a);
-    console.warn('Camera not available, using fallback background.', e);
-  }
-}
+  // Penalty spot circle
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 0.62, 48),
+    new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide, transparent:true, opacity:0.5 })
+  );
+  ring.rotation.x = -Math.PI/2; ring.position.set(0, 0.01, CFG.BALL_Z);
+  scene.add(ring);
 
-/* ─── GOAL POSTS ─────────────────────────────────────── */
-function buildGoal() {
-  const postMat  = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.6, roughness: 0.3 });
-  const netMat   = new THREE.MeshStandardMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.25 });
-  const postR    = 0.08;
-
-  const mkPost = (w, h, d, x, y, z) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), postMat);
-    m.position.set(x, y, z);
-    m.castShadow = true;
-    scene.add(m);
-  };
-
-  const gx = GOAL_W / 2, gy = GOAL_H / 2, gz = GOAL_Z;
-
-  // Left / Right posts
-  mkPost(postR, GOAL_H, postR, -gx, gy, gz);
-  mkPost(postR, GOAL_H, postR,  gx, gy, gz);
-  // Crossbar
-  mkPost(GOAL_W + postR, postR, postR, 0, GOAL_H, gz);
-  // Back net
-  const net = new THREE.Mesh(new THREE.BoxGeometry(GOAL_W, GOAL_H, GOAL_DEPTH), netMat);
-  net.position.set(0, gy, gz - GOAL_DEPTH / 2);
-  scene.add(net);
-
-  // Invisible goal trigger volume (for collision)
-  const goalGeo  = new THREE.BoxGeometry(GOAL_W, GOAL_H, 0.3);
-  const goalMatI = new THREE.MeshBasicMaterial({ visible: false });
-  goalMesh = new THREE.Mesh(goalGeo, goalMatI);
-  goalMesh.position.set(0, gy, gz);
-  scene.add(goalMesh);
-}
-
-/* ─── SOCCER BALL ────────────────────────────────────── */
-function buildBall() {
-  const geo = new THREE.SphereGeometry(0.22, 32, 32);
-
-  // Procedural soccer-ball look with canvas texture
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, 512, 512);
-  ctx.fillStyle = '#111';
-  // Draw pentagon-like patches
-  const patches = [
-    [256,256],[128,128],[384,128],[128,384],[384,384],
-    [256,80],[256,432],[80,256],[432,256]
+  // Field lines
+  const lineMat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.3 });
+  const pts = [
+    new THREE.Vector3(-CFG.GOAL_W/2, 0.01, CFG.GOAL_Z),
+    new THREE.Vector3(-CFG.GOAL_W/2, 0.01, 2.5),
+    new THREE.Vector3( CFG.GOAL_W/2, 0.01, 2.5),
+    new THREE.Vector3( CFG.GOAL_W/2, 0.01, CFG.GOAL_Z),
   ];
-  patches.forEach(([cx,cy]) => {
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+}
+
+/* ── Goal ── */
+function buildGoal() {
+  const postMat = new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.5, roughness:0.3 });
+  const r = 0.07, h = CFG.GOAL_H, w = CFG.GOAL_W, z = CFG.GOAL_Z;
+
+  const mkBox = (sx,sy,sz,x,y,zp) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), postMat);
+    m.position.set(x,y,zp); m.castShadow=true; scene.add(m);
+  };
+  mkBox(r, h, r, -w/2, h/2, z);       // left post
+  mkBox(r, h, r,  w/2, h/2, z);       // right post
+  mkBox(w+r, r, r, 0, h, z);          // crossbar
+  mkBox(r, r, 0.5, -w/2, h/2, z-0.25); // left side bar
+  mkBox(r, r, 0.5,  w/2, h/2, z-0.25); // right side bar
+
+  // Net
+  const netMat = new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, transparent:true, opacity:0.18 });
+  const net = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.6), netMat);
+  net.position.set(0, h/2, z-0.3); scene.add(net);
+}
+
+/* ── Ball (canvas-textured sphere) ── */
+function buildBall() {
+  const cvs = document.createElement('canvas');
+  cvs.width = cvs.height = 512;
+  const ctx = cvs.getContext('2d');
+
+  // Sections: red, yellow, blue, green, orange, white
+  const colors = ['#E31E24','#F7C948','#0055B3','#00A34A','#FF6D00','#ffffff'];
+  const slices = colors.length;
+  for (let i=0; i<slices; i++) {
     ctx.beginPath();
-    for (let i = 0; i < 5; i++) {
-      const a = (i * 2 * Math.PI / 5) - Math.PI / 2;
-      const r = 48;
-      const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
-      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-    }
-    ctx.closePath();
-    ctx.fill();
-  });
+    ctx.moveTo(256,256);
+    ctx.arc(256,256,256, (i/slices)*Math.PI*2, ((i+1)/slices)*Math.PI*2);
+    ctx.fillStyle = colors[i]; ctx.fill();
+  }
+  // Black seam lines
+  ctx.strokeStyle='#111'; ctx.lineWidth=8;
+  for (let i=0; i<slices; i++) {
+    ctx.beginPath();
+    ctx.moveTo(256,256);
+    ctx.lineTo(256+260*Math.cos((i/slices)*Math.PI*2), 256+260*Math.sin((i/slices)*Math.PI*2));
+    ctx.stroke();
+  }
+  ctx.beginPath(); ctx.arc(256,256,252,0,Math.PI*2); ctx.stroke();
 
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.MeshStandardMaterial({ map: tex, metalness: 0.05, roughness: 0.6 });
-
-  ball = new THREE.Mesh(geo, mat);
-  ball.position.set(0, BALL_START_Y, BALL_START_Z);
+  ball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 32, 32),
+    new THREE.MeshStandardMaterial({ map: new THREE.CanvasTexture(cvs), metalness:0.05, roughness:0.6 })
+  );
+  ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
   ball.castShadow = true;
   scene.add(ball);
 }
 
-/* ─── GOALKEEPER (GLB placeholder = stylised box rig) ── */
+/* ── Keeper (blue gummy bear + sprite overlay) ── */
 function buildKeeper() {
-  const mat = new THREE.MeshStandardMaterial({ color: 0x00b4ff, metalness: 0.2, roughness: 0.5 });
-  const matYellow = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.1, roughness: 0.6 });
+  const blue = new THREE.MeshStandardMaterial({ color:0x1565C0, metalness:0.1, roughness:0.3 });
+  const dk   = new THREE.MeshStandardMaterial({ color:0x0D47A1, metalness:0.1, roughness:0.3 });
+  const eye  = new THREE.MeshStandardMaterial({ color:0x111111 });
 
-  const group = new THREE.Group();
-
-  // Torso
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.75, 0.35), mat);
-  torso.position.y = 0.375;
-  group.add(torso);
-
+  const g = new THREE.Group();
+  // Body
+  g.add(mkM(new THREE.SphereGeometry(0.38,16,16), blue, 0,0.38,0));
   // Head
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.35), matYellow);
-  head.position.y = 0.93;
-  group.add(head);
+  g.add(mkM(new THREE.SphereGeometry(0.29,16,16), blue, 0,0.98,0));
+  // Ears
+  g.add(mkM(new THREE.SphereGeometry(0.1,8,8), dk, -0.24,1.22,0));
+  g.add(mkM(new THREE.SphereGeometry(0.1,8,8), dk,  0.24,1.22,0));
+  // Eyes
+  g.add(mkM(new THREE.SphereGeometry(0.055,8,8), eye, -0.1,1.01,0.25));
+  g.add(mkM(new THREE.SphereGeometry(0.055,8,8), eye,  0.1,1.01,0.25));
+  // Arms stretched wide
+  const armG = new THREE.SphereGeometry(0.13,8,8);
+  const armL = mkM(armG, blue, -0.65,0.48,0); armL.scale.x=2.2; g.add(armL);
+  const armR = mkM(armG, blue,  0.65,0.48,0); armR.scale.x=2.2; g.add(armR);
+  // Legs
+  g.add(mkM(new THREE.SphereGeometry(0.15,8,8), blue, -0.18,-0.12,0));
+  g.add(mkM(new THREE.SphereGeometry(0.15,8,8), blue,  0.18,-0.12,0));
 
-  // Left arm
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), mat);
-  armL.position.set(-0.5, 0.42, 0);
-  group.add(armL);
+  g.position.set(0, 0, CFG.GOAL_Z + 0.55);
+  g.scale.set(1.05,1.05,1.05);
+  scene.add(g);
+  keeper = g;
 
-  // Right arm
-  const armR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), mat);
-  armR.position.set(0.5, 0.42, 0);
-  group.add(armR);
-
-  // Left leg
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.22), matYellow);
-  legL.position.set(-0.22, -0.325, 0);
-  group.add(legL);
-
-  // Right leg
-  const legR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.65, 0.22), matYellow);
-  legR.position.set(0.22, -0.325, 0);
-  group.add(legR);
-
-  // Gloves
-  [[-0.5, -0.08], [0.5, -0.08]].forEach(([x,y]) => {
-    const glove = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.22,0.22),
-      new THREE.MeshStandardMaterial({ color: 0xffffff }));
-    glove.position.set(x, y, 0);
-    group.add(glove);
+  // Overlay keeper image as sprite
+  texLoader.load('assets/keeper.png', tex => {
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, alphaTest:0.1 }));
+    spr.scale.set(2.2, 2.8, 1);
+    spr.position.set(0, 1.1, 0);
+    g.add(spr);
   });
-
-  group.position.set(0, GOAL_H / 2 - 0.5, GOAL_Z + 0.5);
-  group.scale.set(1.1, 1.1, 1.1);
-  scene.add(group);
-
-  keeper = group;
-
-  // Try loading a real GLB (optional – fails silently)
-  tryLoadKeeperGLB();
-
-  // Start keeper movement
-  animateKeeper();
 }
 
-/* Attempt to load a real .glb model if provided */
-function tryLoadKeeperGLB() {
-  if (typeof THREE.GLTFLoader === 'undefined') return;
-  const loader = new THREE.GLTFLoader();
-  loader.load('assets/goalkeeper.glb',
-    (gltf) => {
-      scene.remove(keeper);
-      keeper = gltf.scene;
-      keeper.position.set(0, GOAL_H / 2 - 1.2, GOAL_Z + 0.5);
-      keeper.scale.set(1.2, 1.2, 1.2);
-      scene.add(keeper);
-    },
-    undefined,
-    () => { /* silently use box-rig fallback */ }
+function mkM(geo, mat, x, y, z) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x,y,z); m.castShadow=true; return m;
+}
+
+/* ── Yupi Banner behind goal ── */
+function addYupiBanner() {
+  const cvs = document.createElement('canvas');
+  cvs.width=1024; cvs.height=256;
+  const ctx = cvs.getContext('2d');
+  // Yellow background
+  ctx.fillStyle='#F7C948';
+  roundRect(ctx, 0,0,1024,256,40);
+  // Yupi text
+  ctx.font='bold 200px Fredoka One,Arial';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ['#E31E24','#0055B3','#F7C948','#00A34A'].forEach((c,i) => {
+    ctx.fillStyle=c;
+    ctx.fillText(['Y','u','p','i'][i], 200+i*220, 130);
+  });
+  const banner = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.6, 0.9),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cvs), side:THREE.DoubleSide })
   );
-}
+  banner.position.set(0, CFG.GOAL_H+0.55, CFG.GOAL_Z);
+  scene.add(banner);
 
-/* ─── GROUND PLANE ───────────────────────────────────── */
-function buildGround() {
-  const geo = new THREE.PlaneGeometry(20, 20);
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x2d7a2d,
-    roughness: 0.9,
-    metalness: 0.0,
-    transparent: true,
-    opacity: 0.6,
+  // Yupi side boards
+  [[-2.4, '#E31E24'], [2.4, '#0055B3']].forEach(([x, col]) => {
+    const bc = document.createElement('canvas'); bc.width=512; bc.height=128;
+    const bx = bc.getContext('2d');
+    bx.fillStyle=col; bx.fillRect(0,0,512,128);
+    bx.fillStyle='#fff'; bx.font='bold 90px Fredoka One,Arial';
+    bx.textAlign='center'; bx.textBaseline='middle';
+    bx.fillText('Yupi',256,64);
+    const sb = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4,0.35),
+      new THREE.MeshBasicMaterial({ map:new THREE.CanvasTexture(bc), side:THREE.DoubleSide })
+    );
+    sb.position.set(x, 0.5, CFG.GOAL_Z);
+    scene.add(sb);
   });
-  const ground = new THREE.Mesh(geo, mat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -1.5;
-  ground.receiveShadow = true;
-  scene.add(ground);
-
-  // Field lines
-  const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
-  const lineGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-GOAL_W / 2, -1.49, GOAL_Z),
-    new THREE.Vector3(-GOAL_W / 2, -1.49, 1),
-    new THREE.Vector3( GOAL_W / 2, -1.49, 1),
-    new THREE.Vector3( GOAL_W / 2, -1.49, GOAL_Z),
-  ]);
-  scene.add(new THREE.Line(lineGeo, lineMat));
 }
 
-/* ═══════════════════════════════════════════════════════
-   KEEPER AI – moves left/right randomly
-════════════════════════════════════════════════════════ */
-let keeperTargetX = 0;
-let keeperChangeTimer = 0;
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath(); ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath(); ctx.fill();
+}
 
-function animateKeeper() {
-  function loop() {
-    if (!state.gameActive) { keeperAnimId = requestAnimationFrame(loop); return; }
+/* ── Stadium crowd billboards ── */
+function addStadiumSprites() {
+  texLoader.load('assets/stadium.png', tex => {
+    const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, opacity:0.6 });
+    const s = new THREE.Sprite(mat);
+    s.scale.set(24, 8, 1);
+    s.position.set(0, 5, -16);
+    scene.add(s);
+  });
+}
 
-    keeperChangeTimer--;
-    if (keeperChangeTimer <= 0) {
-      keeperTargetX = (Math.random() - 0.5) * KEEPER_RANGE * 2;
-      keeperChangeTimer = 60 + Math.floor(Math.random() * 80);
-    }
-
-    keeper.position.x += (keeperTargetX - keeper.position.x) * KEEPER_SPEED;
-
-    // Arm animation (diving effect)
-    const arms = [keeper.children[2], keeper.children[3]];
-    if (arms[0] && arms[1]) {
-      const swing = Math.sin(Date.now() * 0.005) * 0.15;
-      arms[0].rotation.z =  swing;
-      arms[1].rotation.z = -swing;
-    }
-
-    keeperAnimId = requestAnimationFrame(loop);
+/* ════════════════════════════════════════
+   KEEPER AI
+════════════════════════════════════════ */
+function tickKeeper() {
+  if (!S.active || S.shooting) return;
+  keeperTimer--;
+  if (keeperTimer <= 0) {
+    keeperTarget = (Math.random()-0.5) * CFG.KEEPER_RANGE * 2;
+    keeperTimer = 50 + Math.floor(Math.random()*80);
   }
-  keeperAnimId = requestAnimationFrame(loop);
+  keeper.position.x += (keeperTarget - keeper.position.x) * CFG.KEEPER_SPEED;
+
+  // Arm wave
+  const t = Date.now() * 0.004;
+  if (keeper.children[5]) keeper.children[5].rotation.z =  Math.sin(t) * 0.3;
+  if (keeper.children[6]) keeper.children[6].rotation.z = -Math.sin(t) * 0.3;
 }
 
-/* ═══════════════════════════════════════════════════════
-   BALL SHOOTING MECHANIC
-════════════════════════════════════════════════════════ */
-let swipeStartY = 0;
-let swipeStartX = 0;
-let swipeStartTime = 0;
+/* ════════════════════════════════════════
+   AIMING & SHOOTING
+════════════════════════════════════════ */
+function aimLeft()  { S.aimX = Math.max(-CFG.MAX_AIM, S.aimX - CFG.AIM_STEP); updateAimIndicator(); }
+function aimRight() { S.aimX = Math.min( CFG.MAX_AIM, S.aimX + CFG.AIM_STEP); updateAimIndicator(); }
 
-function registerSwipeHandlers() {
-  const el = renderer.domElement;
-
-  el.addEventListener('touchstart', e => {
-    if (!state.gameActive || state.shooting) return;
-    swipeStartY    = e.touches[0].clientY;
-    swipeStartX    = e.touches[0].clientX;
-    swipeStartTime = Date.now();
-  }, { passive: true });
-
-  el.addEventListener('touchend', e => {
-    if (!state.gameActive || state.shooting) return;
-    const dy = swipeStartY - e.changedTouches[0].clientY;
-    const dx = e.changedTouches[0].clientX - swipeStartX;
-    const dt = Date.now() - swipeStartTime;
-    if (dy < 40 || dt > 700) return; // must swipe up fast enough
-    const normDx = Math.max(-1, Math.min(1, dx / (window.innerWidth * 0.4)));
-    shoot(normDx);
-  }, { passive: true });
-
-  // Mouse fallback for desktop testing
-  el.addEventListener('mousedown', e => {
-    swipeStartY = e.clientY; swipeStartX = e.clientX; swipeStartTime = Date.now();
-  });
-  el.addEventListener('mouseup', e => {
-    if (!state.gameActive || state.shooting) return;
-    const dy = swipeStartY - e.clientY;
-    const dx = e.clientX - swipeStartX;
-    const dt = Date.now() - swipeStartTime;
-    if (dy < 30 || dt > 700) return;
-    const normDx = Math.max(-1, Math.min(1, dx / (window.innerWidth * 0.4)));
-    shoot(normDx);
-  });
+function updateAimIndicator() {
+  const pct = (S.aimX + CFG.MAX_AIM) / (CFG.MAX_AIM*2);
+  El.aim.style.left = (15 + pct*70) + '%';
 }
 
-function shoot(directionX) {
-  if (state.shooting || state.shotsLeft <= 0) return;
-  state.shooting = true;
-  swipeHint.style.opacity = '0';
+function shoot() {
+  if (!S.active || S.shooting || S.shots <= 0) return;
+  S.shooting = true;
 
-  const targetX = directionX * (GOAL_W / 2 - 0.1);
-  const targetY = GOAL_H * (0.25 + Math.random() * 0.55);
-  const targetZ = GOAL_Z;
+  const tx = S.aimX;
+  const ty = CFG.GOAL_H * (0.3 + Math.random()*0.55);
+  const tz = CFG.GOAL_Z;
+  const sx = ball.position.x, sy = ball.position.y, sz = ball.position.z;
+  const t0 = performance.now();
 
-  const startX = ball.position.x;
-  const startY = ball.position.y;
-  const startZ = ball.position.z;
-
-  const startTime = performance.now();
-  const duration  = BALL_TRAVEL * 1000;
-
-  function ballFly(now) {
-    const t = Math.min((now - startTime) / duration, 1);
-    const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
-
-    ball.position.x = startX + (targetX - startX) * ease;
-    ball.position.y = startY + (targetY - startY) * ease + Math.sin(t * Math.PI) * 0.4;
-    ball.position.z = startZ + (targetZ - startZ) * ease;
-    ball.rotation.x += 0.12;
-    ball.rotation.z += 0.06;
-
-    if (t < 1) {
-      ballAnimId = requestAnimationFrame(ballFly);
-    } else {
-      resolveShot(targetX, targetY);
-    }
-  }
-  ballAnimId = requestAnimationFrame(ballFly);
+  (function fly(now) {
+    const t = Math.min((now-t0)/CFG.SHOOT_MS, 1);
+    const e = t<0.5 ? 2*t*t : -1+(4-2*t)*t;
+    ball.position.set(
+      sx+(tx-sx)*e,
+      sy+(ty-sy)*e + Math.sin(t*Math.PI)*0.5,
+      sz+(tz-sz)*e
+    );
+    ball.rotation.x += 0.14; ball.rotation.z += 0.07;
+    if (t < 1) requestAnimationFrame(fly);
+    else resolveShot(tx, ty);
+  })(t0);
 }
 
-/* ═══════════════════════════════════════════════════════
-   COLLISION DETECTION
-════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════
+   COLLISION
+════════════════════════════════════════ */
 function resolveShot(bx, by) {
-  state.shotsLeft--;
-  updateHUD();
+  S.shots--;
+  updatePips();
 
   const kx = keeper.position.x;
-  const keeperHalfW = 0.65;
-  const keeperHalfH = GOAL_H / 2;
+  const saved = Math.abs(bx-kx) < 0.88 && Math.abs(by - CFG.GOAL_H/2) < CFG.GOAL_H/2+0.2;
+  const goal  = !saved && Math.abs(bx) < CFG.GOAL_W/2 && by>0.05 && by<CFG.GOAL_H+0.1;
 
-  const inKeeperX = Math.abs(bx - kx) < keeperHalfW + 0.22;
-  const inKeeperY = Math.abs(by - keeperHalfH) < keeperHalfH + 0.22;
-  const inGoalX   = Math.abs(bx) < GOAL_W / 2;
-  const inGoalY   = by > 0.1 && by < GOAL_H + 0.1;
-
-  let result;
-  if (inKeeperX && inKeeperY) {
-    result = 'SAVED!';
-    state.saves++;
-    showFeedback(result, 'saved');
-  } else if (inGoalX && inGoalY) {
-    result = 'GOAL!';
-    state.goals++;
-    showFeedback(result, 'goal');
+  if (saved) {
+    S.saves++;
+    El.scoreCandy.textContent = S.saves;
+    showFeedback('😅','SAVED!','saved');
+  } else if (goal) {
+    S.goals++;
+    El.scoreYou.textContent = S.goals;
+    El.scoreYou.classList.remove('pop');
+    void El.scoreYou.offsetWidth;
+    El.scoreYou.classList.add('pop');
+    showFeedback('⚽','GOAL!','goal');
   } else {
-    result = 'MISS!';
-    showFeedback(result, 'miss');
+    showFeedback('😬','MISS!','miss');
   }
 
-  updateHUD();
-  // Reset ball after delay
   setTimeout(() => {
-    resetBall();
-    state.shooting = false;
-    if (state.shotsLeft <= 0) {
-      setTimeout(showGameOver, 400);
-    } else {
-      swipeHint.style.opacity = '1';
-    }
+    ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    ball.rotation.set(0,0,0);
+    S.aimX = 0; updateAimIndicator();
+    S.shooting = false;
+    if (S.shots <= 0) setTimeout(endGame, 600);
   }, 1000);
 }
 
-function resetBall() {
-  ball.position.set(0, BALL_START_Y, BALL_START_Z);
-  ball.rotation.set(0, 0, 0);
+/* ════════════════════════════════════════
+   FEEDBACK
+════════════════════════════════════════ */
+function showFeedback(emoji, text, cls) {
+  El.feedback.className = 'feedback ' + cls;
+  El.fbEmoji.textContent = emoji;
+  El.fbText.textContent  = text;
+  El.feedback.classList.remove('screen-hidden');
+  clearTimeout(El.feedback._t);
+  El.feedback._t = setTimeout(() => El.feedback.classList.add('screen-hidden'), 1200);
 }
 
-/* ═══════════════════════════════════════════════════════
-   HUD UPDATES
-════════════════════════════════════════════════════════ */
-function updateHUD() {
-  const goalsEl = $('hud-goals');
-  const savesEl = $('hud-saves');
-  goalsEl.textContent = state.goals;
-  savesEl.textContent = state.saves;
-  $('hud-timer').textContent = state.shotsLeft;
-  goalsEl.classList.remove('pop');
-  void goalsEl.offsetWidth;
-  goalsEl.classList.add('pop');
+/* ════════════════════════════════════════
+   HUD
+════════════════════════════════════════ */
+function updatePips() {
+  El.shotsPips.innerHTML = '';
+  for (let i=0; i<CFG.SHOTS; i++) {
+    const d = document.createElement('div');
+    d.className = 'shot-pip' + (i >= S.shots ? ' used' : '');
+    El.shotsPips.appendChild(d);
+  }
 }
 
-/* ═══════════════════════════════════════════════════════
-   FEEDBACK OVERLAY
-════════════════════════════════════════════════════════ */
-function showFeedback(text, type) {
-  feedbackEl.className = 'feedback ' + type;
-  feedbackText.textContent = text;
-  feedbackEl.classList.remove('hidden');
-  clearTimeout(feedbackEl._t);
-  feedbackEl._t = setTimeout(() => feedbackEl.classList.add('hidden'), 1200);
+/* ════════════════════════════════════════
+   GAME FLOW
+════════════════════════════════════════ */
+function startGame() {
+  Object.assign(S, { goals:0, saves:0, shots:CFG.SHOTS, shooting:false, active:true, aimX:0 });
+  El.scoreYou.textContent = 0; El.scoreCandy.textContent = 0;
+  ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z); ball.rotation.set(0,0,0);
+  keeperTimer = 0; keeper.position.x = 0; keeperTarget = 0;
+  updatePips(); updateAimIndicator();
+
+  El.start.classList.add('screen-hidden');
+  El.gameover.classList.add('screen-hidden');
+  El.hud.classList.remove('screen-hidden');
+  El.aim.classList.remove('screen-hidden');
 }
 
-/* ═══════════════════════════════════════════════════════
-   GAME OVER
-════════════════════════════════════════════════════════ */
-function showGameOver() {
-  state.gameActive = false;
-  hudEl.classList.add('hidden');
-  gameoverScreen.classList.remove('hidden');
+function endGame() {
+  S.active = false;
+  El.hud.classList.add('screen-hidden');
+  El.aim.classList.add('screen-hidden');
+  El.gameover.classList.remove('screen-hidden');
 
-  $('go-goals').textContent = state.goals;
-  $('go-shots').textContent = TOTAL_SHOTS;
+  El.goGoals.textContent = S.goals;
+  El.goTotal.textContent = CFG.SHOTS;
 
-  const pct = state.goals / TOTAL_SHOTS;
-  let emoji, title, rating;
-  if (pct === 1)       { emoji = '🏆'; title = 'PERFECT!';   rating = 'WORLD CLASS STRIKER'; }
-  else if (pct >= 0.6) { emoji = '⚽'; title = 'GREAT JOB!'; rating = 'PRO LEVEL';  }
-  else if (pct >= 0.4) { emoji = '👏'; title = 'NOT BAD!';   rating = 'AMATEUR';    }
-  else                 { emoji = '😅'; title = 'KEEP TRYING'; rating = 'KEEP TRAINING'; }
-
-  $('gameover-emoji').textContent  = emoji;
-  $('gameover-title').textContent  = title;
-  $('gameover-rating').textContent = rating;
+  const pct = S.goals/CFG.SHOTS;
+  if      (pct===1)   { El.goTitle.textContent='PERFECT!';    El.goRating.textContent='🏆 WORLD CLASS STRIKER'; }
+  else if (pct>=0.6)  { El.goTitle.textContent='GREAT JOB!';  El.goRating.textContent='⭐ PRO LEVEL'; }
+  else if (pct>=0.4)  { El.goTitle.textContent='NOT BAD!';    El.goRating.textContent='👟 KEEP KICKING'; }
+  else                { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
 }
 
-/* ═══════════════════════════════════════════════════════
+/* ════════════════════════════════════════
    RENDER LOOP
-════════════════════════════════════════════════════════ */
+════════════════════════════════════════ */
 function renderLoop() {
   requestAnimationFrame(renderLoop);
+  ball.rotation.y += 0.008;
+  tickKeeper();
   renderer.render(scene, camera);
 }
 
-/* ═══════════════════════════════════════════════════════
-   GAME FLOW
-════════════════════════════════════════════════════════ */
-function startGame() {
-  state.goals = 0; state.saves = 0;
-  state.shotsLeft = TOTAL_SHOTS;
-  state.shooting  = false;
-  state.gameActive = true;
-  keeperChangeTimer = 0;
-
-  resetBall();
-  updateHUD();
-
-  startScreen.classList.add('hidden');
-  gameoverScreen.classList.add('hidden');
-  hudEl.classList.remove('hidden');
-  swipeHint.style.opacity = '1';
-}
-
-/* ═══════════════════════════════════════════════════════
-   BOOT SEQUENCE
-════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════
+   BOOT
+════════════════════════════════════════ */
 async function boot() {
-  animateLoader(10, 'Loading libraries…');
-  await delay(300);
-  animateLoader(35, 'Building scene…');
+  const steps = ['Loading assets…', 'Building AR scene…', 'Placing on ground…', 'Ready!'];
+  for (let i=0; i<steps.length; i++) {
+    El.splashBar.style.width = ((i+1)/steps.length*100)+'%';
+    El.splashHint.textContent = steps[i];
+    if (i<2) await new Promise(r=>setTimeout(r,300));
+  }
   await initScene();
-  animateLoader(70, 'Setting up physics…');
-  await delay(300);
-  animateLoader(90, 'Registering controls…');
-  registerSwipeHandlers();
-  await delay(300);
-  animateLoader(100, 'Ready!');
-  await delay(400);
-
-  loadingScreen.classList.add('hidden');
-  startScreen.classList.remove('hidden');
+  await new Promise(r=>setTimeout(r,400));
+  El.splash.classList.add('screen-hidden');
+  El.start.classList.remove('screen-hidden');
 }
 
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+/* ── Controls ── */
+$('btn-start').onclick    = startGame;
+$('btn-restart').onclick  = startGame;
+$('btn-left').onclick     = aimLeft;
+$('btn-right').onclick    = aimRight;
+$('btn-shoot').onclick    = shoot;
+$('btn-leaderboard').onclick = () => alert('🏆 Leaderboard coming soon!\nTop 500 win Rp 5.000 weekly!');
 
-/* ─── Button listeners ───────────────────────────────── */
-$('btn-start').addEventListener('click', startGame);
-$('btn-restart').addEventListener('click', () => {
-  gameoverScreen.classList.add('hidden');
-  startGame();
+/* Touch hold for continuous aim */
+let aimHold = null;
+['btn-left','btn-right'].forEach(id => {
+  const el=$(id), fn = id==='btn-left' ? aimLeft : aimRight;
+  el.addEventListener('touchstart', () => { aimHold=setInterval(fn,120); }, {passive:true});
+  el.addEventListener('touchend',   () => clearInterval(aimHold), {passive:true});
 });
 
-/* ─── Kick off ────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', boot);
