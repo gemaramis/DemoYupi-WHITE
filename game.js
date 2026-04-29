@@ -448,17 +448,17 @@ function renderLoop() {
 }
 
 /* ════════════════════════════════════════
-   BOOT
+   BOOT — fast, no scene init here
 ════════════════════════════════════════ */
 async function boot() {
+  // Animate splash bar quickly — no heavy work here
   const steps = ['Loading assets…', 'Building AR scene…', 'Placing on ground…', 'Ready!'];
-  for (let i=0; i<steps.length; i++) {
-    El.splashBar.style.width = ((i+1)/steps.length*100)+'%';
+  for (let i = 0; i < steps.length; i++) {
+    El.splashBar.style.width = ((i + 1) / steps.length * 100) + '%';
     El.splashHint.textContent = steps[i];
-    if (i<2) await new Promise(r=>setTimeout(r,300));
+    await new Promise(r => setTimeout(r, 200));
   }
-  await initScene();
-  await new Promise(r=>setTimeout(r,400));
+  await new Promise(r => setTimeout(r, 300));
   El.splash.classList.add('screen-hidden');
   El.regScreen.classList.remove('screen-hidden');
 }
@@ -470,13 +470,29 @@ El.btnReg.onclick = async () => {
     alert("Please enter a nickname.");
     return;
   }
-  El.btnReg.textContent = "LOADING...";
+  El.btnReg.textContent = "STARTING...";
   El.btnReg.disabled = true;
-  
-  await registerPlayer(name);
-  
+  El.splashHint.textContent = 'Starting AR...';
+
+  // Register player first (non-blocking, best effort)
+  registerPlayer(name).catch(e => console.warn('Firebase register failed:', e));
+
+  // NOW initialise the 3D scene — user has just tapped (gesture unlocks camera)
   El.regScreen.classList.add('screen-hidden');
-  startGame(); // Automatically start instead of going to start screen
+
+  // Show a brief overlay while scene builds
+  El.splash.classList.remove('screen-hidden');
+  El.splashBar.style.width = '100%';
+  El.splashHint.textContent = 'Launching AR...';
+
+  try {
+    await initScene();
+  } catch (err) {
+    console.error('Scene init failed:', err);
+  }
+
+  El.splash.classList.add('screen-hidden');
+  startGame();
 };
 
 /* ── Leaderboard Logic ── */
