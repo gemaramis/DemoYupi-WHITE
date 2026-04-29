@@ -17,7 +17,17 @@
 }
 html,body{width:100%;height:100%;overflow:hidden;background:var(--dark);font-family:var(--font2)}
 
-/* ── Yupi Logo letters ──────────────────── */
+/* ── Yupi Logo image ─────────────────────── */
+.yupi-logo-img{
+  display:block; object-fit:contain;
+  width:140px; height:auto;
+  filter:drop-shadow(0 3px 8px rgba(0,0,0,0.4));
+}
+.reg-logo-img{ width:120px; margin-bottom:4px; }
+.go-logo-img { width:110px; }
+.hud-footer-logo{ width:60px; height:auto; filter:none; }
+
+/* ── Legacy colored letters (kept for 3D banner canvas use) ── */
 .logo-y{color:#E31E24;font-family:var(--font);font-size:inherit}
 .logo-u{color:#0055B3;font-family:var(--font);font-size:inherit}
 .logo-p{color:#F7C948;font-family:var(--font);font-size:inherit}

@@ -45,55 +45,60 @@ let renderer, scene, camera, ball, keeper, keeperTarget = 0, keeperTimer = 0;
 const texLoader = new THREE.TextureLoader();
 
 /* ════════════════════════════════════════
-   SCENE INIT
+   PHASE 1: Pre-build scene (no camera) — called during splash
 ════════════════════════════════════════ */
-async function initScene() {
-  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+async function preInitScene() {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   $('ar-container').appendChild(renderer.domElement);
 
-  camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 100);
+  camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
   camera.position.set(0, 1.6, 3.5);
   camera.lookAt(0, 1, CFG.GOAL_Z);
 
   scene = new THREE.Scene();
-
-  // Camera background (real-world AR)
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }, audio:false
-    });
-    const vid = Object.assign(document.createElement('video'), { 
-      srcObject:stream, playsInline:true, muted:true, autoplay:true 
-    });
-    vid.play().catch(e => console.warn("Video auto-play prevented:", e));
-    const vt = new THREE.VideoTexture(vid);
-    vt.minFilter = THREE.LinearFilter;
-    scene.background = vt;
-  } catch(e) {
-    console.warn("Camera access denied or error:", e);
-    scene.background = new THREE.Color(0x0a1020);
-  }
+  scene.background = new THREE.Color(0x0a1020); // dark fallback until camera starts
 
   // Lights
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(3, 10, 3); sun.castShadow = true;
-  sun.shadow.mapSize.set(1024,1024); scene.add(sun);
-  scene.add(Object.assign(new THREE.PointLight(0x4488ff, 0.6, 20), { position: new THREE.Vector3(-3,4,-3) }));
+  sun.shadow.mapSize.set(1024, 1024); scene.add(sun);
+  scene.add(Object.assign(new THREE.PointLight(0x4488ff, 0.6, 20), { position: new THREE.Vector3(-3, 4, -3) }));
 
   buildGround(); buildGoal(); buildBall(); buildKeeper();
   addYupiBanner(); addStadiumSprites();
 
   window.addEventListener('resize', () => {
-    camera.aspect = innerWidth/innerHeight;
+    camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  renderLoop();
+  renderLoop(); // start render loop immediately with dark bg
+}
+
+/* ════════════════════════════════════════
+   PHASE 2: Attach camera feed — called after user gesture
+════════════════════════════════════════ */
+async function initCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
+    });
+    const vid = Object.assign(document.createElement('video'), {
+      srcObject: stream, playsInline: true, muted: true, autoplay: true
+    });
+    vid.play().catch(e => console.warn('Video play prevented:', e));
+    const vt = new THREE.VideoTexture(vid);
+    vt.minFilter = THREE.LinearFilter;
+    scene.background = vt; // swap in camera background
+  } catch (e) {
+    console.warn('Camera access denied, using dark background:', e);
+    // game still works without camera
+  }
 }
 
 /* ── Ground ── */
@@ -448,17 +453,25 @@ function renderLoop() {
 }
 
 /* ════════════════════════════════════════
-   BOOT — fast, no scene init here
+   BOOT — builds 3D scene during splash (before user interaction)
 ════════════════════════════════════════ */
 async function boot() {
-  // Animate splash bar quickly — no heavy work here
-  const steps = ['Loading assets…', 'Building AR scene…', 'Placing on ground…', 'Ready!'];
-  for (let i = 0; i < steps.length; i++) {
-    El.splashBar.style.width = ((i + 1) / steps.length * 100) + '%';
-    El.splashHint.textContent = steps[i];
-    await new Promise(r => setTimeout(r, 200));
-  }
-  await new Promise(r => setTimeout(r, 300));
+  El.splashBar.style.width = '20%';
+  El.splashHint.textContent = 'Loading assets…';
+  await new Promise(r => setTimeout(r, 150));
+
+  El.splashBar.style.width = '50%';
+  El.splashHint.textContent = 'Building AR scene…';
+  await preInitScene(); // ← heavy work here, user sees progress bar
+
+  El.splashBar.style.width = '80%';
+  El.splashHint.textContent = 'Placing on ground…';
+  await new Promise(r => setTimeout(r, 200));
+
+  El.splashBar.style.width = '100%';
+  El.splashHint.textContent = 'Ready!';
+  await new Promise(r => setTimeout(r, 400));
+
   El.splash.classList.add('screen-hidden');
   El.regScreen.classList.remove('screen-hidden');
 }
@@ -467,31 +480,19 @@ async function boot() {
 El.btnReg.onclick = async () => {
   const name = El.regName.value.trim();
   if (!name) {
-    alert("Please enter a nickname.");
+    alert('Please enter a nickname.');
     return;
   }
-  El.btnReg.textContent = "STARTING...";
+  El.btnReg.textContent = 'LAUNCHING AR...';
   El.btnReg.disabled = true;
-  El.splashHint.textContent = 'Starting AR...';
 
-  // Register player first (non-blocking, best effort)
+  // Fire and forget Firebase registration
   registerPlayer(name).catch(e => console.warn('Firebase register failed:', e));
 
-  // NOW initialise the 3D scene — user has just tapped (gesture unlocks camera)
+  // Phase 2: get camera AFTER user gesture (fast, just camera stream)
   El.regScreen.classList.add('screen-hidden');
+  await initCamera();
 
-  // Show a brief overlay while scene builds
-  El.splash.classList.remove('screen-hidden');
-  El.splashBar.style.width = '100%';
-  El.splashHint.textContent = 'Launching AR...';
-
-  try {
-    await initScene();
-  } catch (err) {
-    console.error('Scene init failed:', err);
-  }
-
-  El.splash.classList.add('screen-hidden');
   startGame();
 };
 
