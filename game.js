@@ -65,12 +65,15 @@ async function initScene() {
     const stream = await navigator.mediaDevices.getUserMedia({
       video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }, audio:false
     });
-    const vid = Object.assign(document.createElement('video'), { srcObject:stream, playsInline:true, muted:true });
-    await vid.play();
+    const vid = Object.assign(document.createElement('video'), { 
+      srcObject:stream, playsInline:true, muted:true, autoplay:true 
+    });
+    vid.play().catch(e => console.warn("Video auto-play prevented:", e));
     const vt = new THREE.VideoTexture(vid);
     vt.minFilter = THREE.LinearFilter;
     scene.background = vt;
   } catch(e) {
+    console.warn("Camera access denied or error:", e);
     scene.background = new THREE.Color(0x0a1020);
   }
 
