@@ -6,9 +6,17 @@
   <title>Yupi AR Goalie – Penalty Shootout</title>
   <meta name="description" content="Yupi AR Penalty Shootout. Scan. Play. Win! GUMMY FUN, GOAL WON!"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet"/>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <!-- Preload game images so they are in cache when Three.js requests them -->
+  <link rel="preload" href="assets/stadium.png" as="image"/>
+  <link rel="preload" href="assets/keeper.png"  as="image"/>
+  <link rel="preload" href="assets/ball.png"    as="image"/>
+  <link rel="preload" href="assets/logo.png"    as="image"/>
+
+  <!-- Three.js — defer so it doesn't block HTML parsing -->
+  <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -23,7 +31,7 @@
     <div class="splash-tagline">GUMMY FUN, GOAL WON!</div>
     <div class="splash-ball">⚽</div>
     <div class="splash-bar-wrap"><div class="splash-bar" id="splash-bar"></div></div>
-    <div class="splash-hint" id="splash-hint">Loading game…</div>
+    <div class="splash-hint" id="splash-hint">Preparing AR…</div>
   </div>
 </div>
 
@@ -176,7 +184,7 @@
   </div>
 </div>
 
-<!-- Game entry point (firebase-db.js is imported internally by game.js) -->
+<!-- Game entry point — module deferred automatically by browser -->
 <script type="module" src="game.js"></script>
 </body>
 </html>

@@ -42,14 +42,34 @@ const El = {
 
 /* ── THREE ── */
 let renderer, scene, camera, ball, keeper, keeperTarget = 0, keeperTimer = 0;
-const texLoader = new THREE.TextureLoader();
+let texLoader;
+
+/**
+ * Wait until the defer-loaded THREE global is available.
+ * Typically resolves in <50 ms after DOMContentLoaded fires.
+ */
+function waitForThree() {
+  return new Promise(resolve => {
+    if (typeof THREE !== 'undefined') { resolve(); return; }
+    const iv = setInterval(() => {
+      if (typeof THREE !== 'undefined') { clearInterval(iv); resolve(); }
+    }, 30);
+  });
+}
+
+/** Promisify THREE.TextureLoader.load so we can await it. */
+function loadTexture(url) {
+  return new Promise((resolve, reject) =>
+    texLoader.load(url, resolve, undefined, reject)
+  );
+}
 
 /* ════════════════════════════════════════
    PHASE 1: Pre-build scene (no camera) — called during splash
 ════════════════════════════════════════ */
 async function preInitScene() {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true }); // antialias:false is faster on mobile
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); // cap at 1.5x (was 2x)
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   $('ar-container').appendChild(renderer.domElement);
@@ -59,17 +79,18 @@ async function preInitScene() {
   camera.lookAt(0, 1, CFG.GOAL_Z);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0a1020); // dark fallback until camera starts
+  scene.background = new THREE.Color(0x0a1020);
 
   // Lights
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(3, 10, 3); sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024); scene.add(sun);
+  sun.shadow.mapSize.set(512, 512); // was 1024 — halved for performance
+  scene.add(sun);
   scene.add(Object.assign(new THREE.PointLight(0x4488ff, 0.6, 20), { position: new THREE.Vector3(-3, 4, -3) }));
 
-  buildGround(); buildGoal(); buildBall(); buildKeeper();
-  addYupiBanner(); addStadiumSprites();
+  buildGround(); buildGoal(); buildBall();
+  addYupiBanner();
 
   window.addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
@@ -77,7 +98,7 @@ async function preInitScene() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  renderLoop(); // start render loop immediately with dark bg
+  renderLoop();
 }
 
 /* ════════════════════════════════════════
@@ -86,18 +107,18 @@ async function preInitScene() {
 async function initCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
+      // 720p is sufficient for WebAR and requests faster on mobile
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
     });
     const vid = Object.assign(document.createElement('video'), {
       srcObject: stream, playsInline: true, muted: true, autoplay: true
     });
-    vid.play().catch(e => console.warn('Video play prevented:', e));
+    await vid.play().catch(e => console.warn('Video play prevented:', e));
     const vt = new THREE.VideoTexture(vid);
     vt.minFilter = THREE.LinearFilter;
-    scene.background = vt; // swap in camera background
+    scene.background = vt;
   } catch (e) {
     console.warn('Camera access denied, using dark background:', e);
-    // game still works without camera
   }
 }
 
@@ -185,8 +206,7 @@ function buildBall() {
   scene.add(ball);
 }
 
-/* ── Keeper (blue gummy bear + sprite overlay) ── */
-function buildKeeper() {
+function buildKeeper(keeperTex) {
   const blue = new THREE.MeshStandardMaterial({ color:0x1565C0, metalness:0.1, roughness:0.3 });
   const dk   = new THREE.MeshStandardMaterial({ color:0x0D47A1, metalness:0.1, roughness:0.3 });
   const eye  = new THREE.MeshStandardMaterial({ color:0x111111 });
@@ -215,13 +235,13 @@ function buildKeeper() {
   scene.add(g);
   keeper = g;
 
-  // Overlay keeper image as sprite
-  texLoader.load('assets/keeper.png', tex => {
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, alphaTest:0.1 }));
+  // Use pre-loaded texture (no extra network request during game start)
+  if (keeperTex) {
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:keeperTex, transparent:true, alphaTest:0.1 }));
     spr.scale.set(2.2, 2.8, 1);
     spr.position.set(0, 1.1, 0);
     g.add(spr);
-  });
+  }
 }
 
 function mkM(geo, mat, x, y, z) {
@@ -278,14 +298,13 @@ function roundRect(ctx,x,y,w,h,r){
 }
 
 /* ── Stadium crowd billboards ── */
-function addStadiumSprites() {
-  texLoader.load('assets/stadium.png', tex => {
-    const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, opacity:0.6 });
-    const s = new THREE.Sprite(mat);
-    s.scale.set(24, 8, 1);
-    s.position.set(0, 5, -16);
-    scene.add(s);
-  });
+function addStadiumSprites(stadiumTex) {
+  if (!stadiumTex) return;
+  const mat = new THREE.SpriteMaterial({ map:stadiumTex, transparent:true, opacity:0.6 });
+  const s = new THREE.Sprite(mat);
+  s.scale.set(24, 8, 1);
+  s.position.set(0, 5, -16);
+  scene.add(s);
 }
 
 /* ════════════════════════════════════════
@@ -453,24 +472,45 @@ function renderLoop() {
 }
 
 /* ════════════════════════════════════════
-   BOOT — builds 3D scene during splash (before user interaction)
+   BOOT — waits for THREE, loads textures in parallel, then builds scene
 ════════════════════════════════════════ */
 async function boot() {
-  El.splashBar.style.width = '20%';
+  // Step 1: Wait for the deferred Three.js script to be ready
+  El.splashBar.style.width = '10%';
+  El.splashHint.textContent = 'Loading engine…';
+  await waitForThree();
+
+  texLoader = new THREE.TextureLoader();
+
+  // Step 2: Load all textures in parallel (images are already being preloaded
+  // by <link rel="preload"> so this is mostly a cache hit)
+  El.splashBar.style.width = '30%';
   El.splashHint.textContent = 'Loading assets…';
-  await new Promise(r => setTimeout(r, 150));
 
-  El.splashBar.style.width = '50%';
+  let loaded = 0;
+  const total = 2; // keeper + stadium (ball & logo are CSS/HTML, not Three.js textures)
+  const onProgress = () => {
+    loaded++;
+    El.splashBar.style.width = (30 + Math.round((loaded / total) * 40)) + '%';
+  };
+
+  const [keeperTex, stadiumTex] = await Promise.all([
+    loadTexture('assets/keeper.png').then(t  => { onProgress(); return t; }),
+    loadTexture('assets/stadium.png').then(t => { onProgress(); return t; }),
+  ]);
+
+  // Step 3: Build the 3D scene (synchronous after textures are ready)
+  El.splashBar.style.width = '75%';
   El.splashHint.textContent = 'Building AR scene…';
-  await preInitScene(); // ← heavy work here, user sees progress bar
+  await preInitScene();
 
-  El.splashBar.style.width = '80%';
-  El.splashHint.textContent = 'Placing on ground…';
-  await new Promise(r => setTimeout(r, 200));
+  // Pass pre-loaded textures into builders (no extra requests)
+  buildKeeper(keeperTex);
+  addStadiumSprites(stadiumTex);
 
   El.splashBar.style.width = '100%';
   El.splashHint.textContent = 'Ready!';
-  await new Promise(r => setTimeout(r, 400));
+  await new Promise(r => setTimeout(r, 300));
 
   El.splash.classList.add('screen-hidden');
   El.regScreen.classList.remove('screen-hidden');
