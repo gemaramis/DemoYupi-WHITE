@@ -1,11 +1,11 @@
 /**
  * YUPI AR PENALTY SHOOTOUT v2 — game.js
- * Swipe-to-shoot | FBX assets | Three.js ES modules
+ * Swipe-to-shoot | GLB assets | Three.js ES modules
  */
 "use strict";
 
 import * as THREE from 'three';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './firebase-db.js';
 
@@ -71,10 +71,22 @@ const Snd={
 /* ════════════════════════════════════════
    FBX HELPERS
 ════════════════════════════════════════ */
-function loadFBX(url, onPct) {
+/** Load a GLB/GLTF file. Returns the root Group (gltf.scene). */
+function loadGLTF(url, onPct) {
   return new Promise((resolve, reject) => {
-    const loader = new FBXLoader();
-    loader.load(url, resolve, xhr => onPct && onPct(xhr.loaded / (xhr.total || 1)), reject);
+    const loader = new GLTFLoader();
+    loader.load(
+      url,
+      (gltf) => {
+        // Attach animations to the scene group for compatibility
+        if (gltf.animations && gltf.animations.length > 0) {
+          gltf.scene.animations = gltf.animations;
+        }
+        resolve(gltf.scene);
+      },
+      (xhr) => onPct && xhr.lengthComputable && onPct(xhr.loaded / xhr.total),
+      reject
+    );
   });
 }
 
@@ -620,7 +632,7 @@ function showBootError(msg) {
 }
 
 /* ════════════════════════════════════════
-   BOOT — load FBX assets then build scene
+   BOOT — load GLB assets then build scene
 ════════════════════════════════════════ */
 async function boot() {
   try {
@@ -630,61 +642,48 @@ async function boot() {
 
     El.splashBar.style.width='15%';
     El.splashHint.textContent='Loading ball…';
-    const bolaFBX = await loadFBX('assets/bola.fbx', p=>{
+    const bolaGLB = await loadGLTF('assets/bola.glb', p=>{
       El.splashBar.style.width=(15+p*10)+'%';
     });
-    // Normalize to 0.62 diameter (bigger = more visible)
-    normalizeFBX(bolaFBX, 0.62);
-    bolaFBX.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    const ballMeshCount = fixFBXMaterials(bolaFBX);
-    // If FBX had no visible geometry, use a bright fallback sphere
+    normalizeFBX(bolaGLB, 0.62);
+    bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    const ballMeshCount = fixFBXMaterials(bolaGLB);
     if (ballMeshCount === 0) {
       const fallback = new THREE.Mesh(
         new THREE.SphereGeometry(0.31, 24, 24),
-        new THREE.MeshStandardMaterial({color:0xffd700, metalness:0.1, roughness:0.4})
+        new THREE.MeshStandardMaterial({color:0xffd700, metalness:0.2, roughness:0.3})
       );
-      bolaFBX.add(fallback);
-      console.warn('[Yupi] bola.fbx had no meshes — using fallback sphere');
-    } else {
-      // Boost emissive so ball is visible even in low light
-      bolaFBX.traverse(c => {
-        if (!c.isMesh) return;
-        const mats = Array.isArray(c.material) ? c.material : [c.material];
-        mats.forEach(m => {
-          if (m.emissive) { m.emissive.set(0x222200); m.emissiveIntensity = 0.4; }
-        });
-      });
+      bolaGLB.add(fallback);
+      console.warn('[Yupi] bola.glb had no meshes — using fallback sphere');
     }
-    gameGroup.add(bolaFBX);
-    ballMesh=bolaFBX;
+    gameGroup.add(bolaGLB);
+    ballMesh=bolaGLB;
 
     El.splashBar.style.width='28%';
     El.splashHint.textContent='Loading goal…';
-    const gawangFBX = await loadFBX('assets/gawang.fbx', p=>{
+    const gawangGLB = await loadGLTF('assets/gawang.glb', p=>{
       El.splashBar.style.width=(28+p*17)+'%';
     });
-    // Normalize by HEIGHT so goal is always taller than keeper
-    normalizeFBXByHeight(gawangFBX, CFG.GOAL_H);
-    gawangFBX.position.set(0, 0, CFG.GOAL_Z);
-    fixFBXMaterials(gawangFBX);
-    gameGroup.add(gawangFBX);
-    gawangMesh=gawangFBX;
+    normalizeFBXByHeight(gawangGLB, CFG.GOAL_H);
+    gawangGLB.position.set(0, 0, CFG.GOAL_Z);
+    fixFBXMaterials(gawangGLB);
+    gameGroup.add(gawangGLB);
+    gawangMesh=gawangGLB;
 
     El.splashBar.style.width='46%';
-    El.splashHint.textContent='Loading Reddie… (9 MB)';
-    const reddieFBX = await loadFBX('assets/Reddie.fbx', p=>{
+    El.splashHint.textContent='Loading Reddie…';
+    const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    // Reddie slightly shorter than goal post
-    normalizeFBXByHeight(reddieFBX, CFG.GOAL_H * 0.7);
-    reddieFBX.position.set(0, 0, CFG.GOAL_Z+0.55);
-    fixFBXMaterials(reddieFBX);
-    if(reddieFBX.animations && reddieFBX.animations.length>0){
-      mixer=new THREE.AnimationMixer(reddieFBX);
-      mixer.clipAction(reddieFBX.animations[0]).play();
+    normalizeFBXByHeight(reddieGLB, CFG.GOAL_H * 0.7);
+    reddieGLB.position.set(0, 0, CFG.GOAL_Z+0.55);
+    fixFBXMaterials(reddieGLB);
+    if(reddieGLB.animations && reddieGLB.animations.length>0){
+      mixer=new THREE.AnimationMixer(reddieGLB);
+      mixer.clipAction(reddieGLB.animations[0]).play();
     }
-    gameGroup.add(reddieFBX);
-    keeperMesh=reddieFBX;
+    gameGroup.add(reddieGLB);
+    keeperMesh=reddieGLB;
 
     El.splashBar.style.width='95%';
     El.splashHint.textContent='Almost ready…';
