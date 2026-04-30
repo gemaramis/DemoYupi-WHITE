@@ -239,73 +239,191 @@ function onXR8Place(e) {
   } catch(ex) { console.error('XR8 place:', ex); }
 }
 
-/* NOTE: 8th Wall CDN retired Feb 2026. Using Three.js fallback. */
+/* ════════════════════════════════════════
+   XR8 PIPELINE INTEGRATION
+════════════════════════════════════════ */
 
-/** Set up Three.js scene + camera stream — fallback mode */
-async function initScene() {
-  if (renderer) return; // already initialized
-  renderer = new THREE.WebGLRenderer({antialias:false, alpha:true, powerPreference:'high-performance'});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
-  renderer.setSize(innerWidth,innerHeight);
-  renderer.shadowMap.enabled=true;
-  // Fullscreen canvas behind all UI
-  renderer.domElement.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;';
-  document.body.prepend(renderer.domElement);
-
-  camera = new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.01,50);
-  camera.position.set(0,0.45,0.9); camera.lookAt(0,0.1,CFG.GOAL_Z);
-
+/** Build the Three.js scene graph (lights, ground, objects). No renderer yet. */
+function buildScene() {
   scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff,0.85));
-  const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
-  sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
-  const fill = new THREE.PointLight(0x4488ff,0.5,20);
-  fill.position.set(-3,5,-3);
-  scene.add(fill);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  sun.position.set(3, 10, 4); sun.castShadow = true; sun.shadow.mapSize.set(512,512);
+  scene.add(sun);
 
-  gameGroup.visible=true; gamePlaced=true; scene.add(gameGroup);
-  buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
+  // gameGroup starts hidden/unplaced; placement sets position
+  gameGroup.visible = false; gamePlaced = false;
+  scene.add(gameGroup);
 
-  // Request camera permission NOW (inside user gesture context)
-  await initCamera();
-  initSwipeControls();
-
-  window.addEventListener('resize',()=>{
-    camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth,innerHeight);
-    if(El.powerCanvas){El.powerCanvas.width=innerWidth;El.powerCanvas.height=innerHeight;}
-  });
-  // Render loop
-  (function loop(){
-    requestAnimationFrame(loop);
-    const dt=clock.getDelta();
-    if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008;
-    tickKeeper(dt); tickConfetti(); if(mixer) mixer.update(dt);
-    renderer.render(scene,camera);
-  })();
+  buildReticle();
+  buildGround();
+  buildTrajectoryDots();
+  addYupiBanner();
+  buildConfettiPool();
 }
 
-/** Placement step: user points camera at floor and taps to confirm. */
-function startFallbackSession() {
+/** Faint AR reticle ring shown before placement */
+function buildReticle() {
+  const geo = new THREE.RingGeometry(0.07, 0.09, 36);
+  // rotate so ring lies flat
+  geo.applyMatrix4(new THREE.Matrix4().makeRotationX(-Math.PI / 2));
+  reticleMesh = new THREE.Mesh(geo,
+    new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide, transparent:true, opacity:0.85}));
+  reticleMesh.visible = false;
+  scene.add(reticleMesh);
+}
+
+/**
+ * Initialise Three.js renderer on #ar-canvas.
+ * Called inside a user-gesture context (registration button click).
+ */
+async function initScene() {
+  if (renderer) return;
+
+  const canvas = document.getElementById('ar-canvas');
+  canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;';
+
+  renderer = new THREE.WebGLRenderer({canvas, antialias:false, alpha:true, powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+
+  camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
+
+  buildScene();
+  initSwipeControls();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    if (El.powerCanvas) { El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight; }
+  });
+}
+
+/** Called when the Start Screen "TAP TO PLAY" button is tapped. */
+function startXRSession() {
   El.start.classList.add('screen-hidden');
 
-  // Build placement overlay
-  const overlay = Object.assign(document.createElement('div'),{
-    id:'place-overlay',
-    innerHTML:`
-      <div style="text-align:center;padding:24px">
-        <div style="font-size:52px;margin-bottom:12px">🎯</div>
-        <div style="font-size:22px;font-weight:800;color:#FFD700;margin-bottom:8px">Place Your Goal</div>
-        <div style="font-size:14px;color:rgba(255,255,255,.8);margin-bottom:28px;line-height:1.6">
-          Point your camera at a flat surface<br>then tap the button below
-        </div>
-        <button id="btn-place-confirm" style="padding:14px 36px;background:#E31E24;color:#fff;border:none;border-radius:32px;font-size:18px;font-weight:800;font-family:Plus Jakarta Sans,sans-serif;letter-spacing:.5px;box-shadow:0 4px 20px rgba(227,30,36,.5);cursor:pointer">⚽ PLACE GOAL HERE</button>
-      </div>`,
-  });
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(2px)';
+  if (typeof XR8 === 'undefined') {
+    // ── FALLBACK: XR8 not loaded — fixed camera, simulated placement ──
+    console.warn('[Yupi AR] XR8 not available – falling back to fixed camera mode.');
+    camera.position.set(0, 0.45, 0.9);
+    camera.lookAt(0, 0.1, CFG.GOAL_Z);
+    initCamera().then(() => showPlacementUI(false));
+    (function loop() {
+      requestAnimationFrame(loop);
+      const dt = clock.getDelta();
+      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
+      tickKeeper(dt); tickConfetti(); if (mixer) mixer.update(dt);
+      renderer.render(scene, camera);
+    })();
+    return;
+  }
+
+  // ── REAL AR MODE: use 8th Wall SLAM pipeline ──
+  const yupiModule = {
+    name: 'yupi-ar',
+
+    onStart: () => {
+      showPlacementUI(true);
+    },
+
+    onUpdate: ({processCpuResult}) => {
+      // 1. Sync Three.js camera from SLAM pose
+      if (processCpuResult?.reality?.camera) {
+        const {rotation: r, position: p, intrinsics} = processCpuResult.reality.camera;
+        camera.quaternion.set(r.x, r.y, r.z, r.w);
+        camera.position.set(p.x, p.y, p.z);
+        if (intrinsics) {
+          camera.projectionMatrix.fromArray(intrinsics);
+          camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        }
+      }
+
+      // 2. Live reticle via SLAM hit-test
+      if (!gamePlaced && reticleMesh) {
+        try {
+          const hits = XR8.XrController.hitTest(0.5, 0.5, ['ESTIMATED_SURFACE','FEATURE_POINT']);
+          if (hits.length > 0) {
+            const {position: hp, rotation: hr} = hits[0];
+            reticleMesh.position.set(hp.x, hp.y, hp.z);
+            reticleMesh.quaternion.set(hr.x, hr.y, hr.z, hr.w);
+            reticleMesh.visible = true;
+          } else { reticleMesh.visible = false; }
+        } catch(_) { reticleMesh.visible = false; }
+      }
+
+      // 3. Animate
+      const dt = clock.getDelta();
+      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
+      tickKeeper(dt); tickConfetti(); if (mixer) mixer.update(dt);
+    },
+
+    onRender: () => renderer.render(scene, camera),
+  };
+
+  XR8.addCameraPipelineModules([
+    XR8.GlTexturePipelineModule(),
+    XR8.CameraPipelineModule(),
+    XR8.XrControllerPipelineModule(),
+    yupiModule,
+  ]);
+
+  XR8.run({canvas: renderer.domElement});
+}
+
+/**
+ * Placement overlay — shown after XR session starts.
+ * @param {boolean} useHitTest - true=XR8 SLAM, false=fixed fallback position
+ */
+function showPlacementUI(useHitTest) {
+  const overlay = document.createElement('div');
+  overlay.id = 'place-overlay';
+  overlay.innerHTML = `
+    <div style="position:fixed;bottom:0;left:0;right:0;padding:24px 20px 36px;
+                background:linear-gradient(0deg,rgba(0,0,0,.8),transparent);
+                display:flex;flex-direction:column;align-items:center;gap:12px">
+      <div style="font-size:15px;color:#FFD700;font-weight:800;letter-spacing:1px">POINT AT THE FLOOR</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.75);margin-bottom:4px">A gold ring shows where the goal will land</div>
+      <button id="btn-place-confirm"
+        style="padding:16px 40px;background:#E31E24;color:#fff;border:none;border-radius:40px;
+               font-size:18px;font-weight:800;font-family:Plus Jakarta Sans,sans-serif;
+               letter-spacing:.5px;box-shadow:0 6px 24px rgba(227,30,36,.55);cursor:pointer;
+               width:100%;max-width:340px">⚽ PLACE GOAL HERE</button>
+    </div>`;
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:200;pointer-events:none';
+  overlay.querySelector('button').style.pointerEvents = 'auto';
   document.body.appendChild(overlay);
 
   document.getElementById('btn-place-confirm').onclick = () => {
+    let placed = false;
+
+    if (useHitTest && typeof XR8 !== 'undefined') {
+      try {
+        const hits = XR8.XrController.hitTest(0.5, 0.5, ['ESTIMATED_SURFACE','FEATURE_POINT']);
+        if (hits.length > 0) {
+          const {position: p, rotation: r} = hits[0];
+          gameGroup.position.set(p.x, p.y, p.z);
+          gameGroup.quaternion.set(r.x, r.y, r.z, r.w);
+          placed = true;
+        }
+      } catch(ex) { console.warn('hitTest failed:', ex); }
+    }
+
+    if (!placed) {
+      // Fallback: place 1.2m in front of camera at floor level
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      gameGroup.position.set(
+        camera.position.x + fwd.x * 1.2,
+        camera.position.y - 0.4,  // estimate floor
+        camera.position.z + fwd.z * 1.2
+      );
+    }
+
+    gameGroup.visible = true;
+    gamePlaced = true;
+    if (reticleMesh) reticleMesh.visible = false;
     overlay.remove();
     El.hud.classList.remove('screen-hidden');
     El.swipeHint.classList.remove('screen-hidden');
@@ -790,7 +908,7 @@ $('btn-leaderboard').onclick = async () => {
 El.btnCloseLb.onclick=()=>El.lbScreen.classList.add('screen-hidden');
 
 /* ── Controls ── */
-$('btn-start').onclick = startFallbackSession;
+$('btn-start').onclick = startXRSession;
 $('btn-restart').onclick = () => { gamePlaced=true; startGame(); };
 
 /* ── Boot ── */
