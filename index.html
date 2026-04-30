@@ -6,7 +6,6 @@
   <title>Yupi AR Goalie – Penalty Shootout</title>
   <meta name="description" content="Yupi AR Penalty Shootout. Scan. Play. Win! GUMMY FUN, GOAL WON!"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet"/>
 
   <!-- Preload game images so they are in cache when Three.js requests them -->
@@ -15,8 +14,8 @@
   <link rel="preload" href="assets/ball.png"    as="image"/>
   <link rel="preload" href="assets/logo.png"    as="image"/>
 
-  <!-- Three.js — defer so it doesn't block HTML parsing -->
-  <script defer src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- Three.js — served locally, no CDN dependency -->
+  <script defer src="assets/three.min.js"></script>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
