@@ -364,9 +364,8 @@ function startXRSession() {
   };
 
   XR8.addCameraPipelineModules([
-    XR8.GlTexturePipelineModule(),
-    XR8.CameraPipelineModule(),
-    XR8.XrControllerPipelineModule(),
+    XR8.GlTextureRenderer.pipelineModule(),
+    XR8.XrController.pipelineModule(),
     yupiModule,
   ]);
 
