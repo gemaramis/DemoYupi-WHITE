@@ -243,9 +243,9 @@ function onXR8Place(e) {
    XR8 PIPELINE INTEGRATION
 ════════════════════════════════════════ */
 
-/** Build the Three.js scene graph (lights, ground, objects). No renderer yet. */
-function buildScene() {
-  scene = new THREE.Scene();
+/** Build the Three.js scene graph (lights, ground, objects). */
+function buildScene(targetScene) {
+  scene = targetScene || new THREE.Scene();
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 1.2);
   sun.position.set(3, 10, 4); sun.castShadow = true; sun.shadow.mapSize.set(512,512);
@@ -275,9 +275,9 @@ function buildReticle() {
 
 /**
  * Initialise Three.js renderer on #ar-canvas.
- * Called inside a user-gesture context (registration button click).
+ * Used ONLY for the non-XR8 fallback mode.
  */
-async function initScene() {
+async function initFallbackScene() {
   if (renderer) return;
 
   const canvas = document.getElementById('ar-canvas');
@@ -287,11 +287,10 @@ async function initScene() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.autoClear = false; // <-- CRITICAL: Don't clear the XR8 camera feed
 
   camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
 
-  buildScene();
+  buildScene(scene);
   initSwipeControls();
 
   window.addEventListener('resize', () => {
@@ -309,6 +308,7 @@ function startXRSession() {
   if (typeof XR8 === 'undefined') {
     // ── FALLBACK: XR8 not loaded — fixed camera, simulated placement ──
     console.warn('[Yupi AR] XR8 not available – falling back to fixed camera mode.');
+    await initFallbackScene();
     camera.position.set(0, 0.45, 0.9);
     camera.lookAt(0, 0.1, CFG.GOAL_Z);
     initCamera().then(() => showPlacementUI(false));
@@ -327,22 +327,20 @@ function startXRSession() {
     name: 'yupi-ar',
 
     onStart: () => {
+      // XR8.Threejs provides the synced scene, camera, and renderer
+      const xr = XR8.Threejs.xrScene();
+      scene = xr.scene;
+      camera = xr.camera;
+      renderer = xr.renderer;
+
+      renderer.shadowMap.enabled = true;
+      buildScene(scene);
+      initSwipeControls();
       showPlacementUI(true);
     },
 
-    onUpdate: ({processCpuResult}) => {
-      // 1. Sync Three.js camera from SLAM pose
-      if (processCpuResult?.reality?.camera) {
-        const {rotation: r, position: p, intrinsics} = processCpuResult.reality.camera;
-        camera.quaternion.set(r.x, r.y, r.z, r.w);
-        camera.position.set(p.x, p.y, p.z);
-        if (intrinsics) {
-          camera.projectionMatrix.fromArray(intrinsics);
-          camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-        }
-      }
-
-      // 2. Live reticle via SLAM hit-test
+    onUpdate: () => {
+      // Live reticle via SLAM hit-test
       if (!gamePlaced && reticleMesh) {
         try {
           const hits = XR8.XrController.hitTest(0.5, 0.5, ['ESTIMATED_SURFACE','FEATURE_POINT']);
@@ -355,20 +353,16 @@ function startXRSession() {
         } catch(_) { reticleMesh.visible = false; }
       }
 
-      // 3. Animate
+      // Animate
       const dt = clock.getDelta();
       if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
       tickKeeper(dt); tickConfetti(); if (mixer) mixer.update(dt);
-    },
-
-    onRender: () => {
-      renderer.clearDepth();
-      renderer.render(scene, camera);
     },
   };
 
   XR8.addCameraPipelineModules([
     XR8.GlTextureRenderer.pipelineModule(),
+    XR8.Threejs.pipelineModule(), // Automatically syncs camera and draws video feed to scene.background
     XR8.XrController.pipelineModule(),
     yupiModule,
   ]);
@@ -377,8 +371,11 @@ function startXRSession() {
     disableWorldTracking: false,
   });
 
+  // XR8 automatically creates a canvas and attaches it to the container if no canvas is provided,
+  // or we can pass our pre-existing canvas. XR8.Threejs.pipelineModule() needs it.
+  const canvas = document.getElementById('ar-canvas');
   XR8.run({
-    canvas: renderer.domElement,
+    canvas,
     allowedDevices: XR8.XrConfig.device().ANY
   });
 }
@@ -878,23 +875,6 @@ El.btnReg.onclick = async () => {
   El.btnReg.textContent='STARTING…'; El.btnReg.disabled=true;
   registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
-
-  // Show a loading cover so user never sees blank screen during camera init
-  const cover = Object.assign(document.createElement('div'), {
-    id:'cam-cover',
-    innerHTML:'<div style="text-align:center"><div style="font-size:48px">📷</div><div style="margin-top:12px;font-size:18px;font-weight:700">Starting camera…</div><div style="margin-top:8px;font-size:13px;opacity:.7">Allow camera access when prompted</div></div>',
-  });
-  cover.style.cssText='position:fixed;inset:0;background:#000;color:#FFD700;display:flex;align-items:center;justify-content:center;z-index:500;font-family:Plus Jakarta Sans,sans-serif';
-  document.body.appendChild(cover);
-
-  try {
-    await initScene();
-  } catch(err) {
-    cover.innerHTML=`<div style="text-align:center"><div style="font-size:36px">⚠️</div><div style="margin:12px 0;font-size:16px">${err.message||'Camera failed'}</div><button onclick="location.reload()" style="padding:10px 24px;background:#FFD700;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer">🔄 Retry</button></div>`;
-    return;
-  }
-
-  cover.remove();
   El.start.classList.remove('screen-hidden');
 };
 
