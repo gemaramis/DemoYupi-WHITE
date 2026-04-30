@@ -68,8 +68,14 @@ function loadTexture(url) {
    PHASE 1: Pre-build scene (no camera) — called during splash
 ════════════════════════════════════════ */
 async function preInitScene() {
-  renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true }); // antialias:false is faster on mobile
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); // cap at 1.5x (was 2x)
+  // Catch WebGL init failures explicitly
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
+  } catch (e) {
+    throw new Error('WebGL failed to start. Try a different browser or enable hardware acceleration. (' + e.message + ')');
+  }
+
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   $('ar-container').appendChild(renderer.domElement);
@@ -474,46 +480,62 @@ function renderLoop() {
 /* ════════════════════════════════════════
    BOOT — waits for THREE, loads textures in parallel, then builds scene
 ════════════════════════════════════════ */
+function showBootError(msg) {
+  El.splashHint.textContent = '⚠️ ' + msg;
+  El.splashHint.style.cssText = 'color:#FF5252;font-size:13px;padding:0 16px;line-height:1.4';
+  El.splashBar.style.background = '#E31E24';
+  // Add a reload button
+  const btn = document.createElement('button');
+  btn.textContent = '🔄 Tap to Reload';
+  btn.style.cssText = 'margin-top:16px;padding:10px 24px;background:#F7C948;border:none;border-radius:24px;font-size:16px;font-weight:bold;cursor:pointer';
+  btn.onclick = () => location.reload();
+  El.splashHint.after(btn);
+}
+
 async function boot() {
-  // Step 1: Wait for the deferred Three.js script to be ready
-  El.splashBar.style.width = '10%';
-  El.splashHint.textContent = 'Loading engine…';
-  await waitForThree();
+  try {
+    // Step 1: Confirm THREE is available (blocking script, should be instant)
+    El.splashBar.style.width = '10%';
+    El.splashHint.textContent = 'Loading engine…';
+    await waitForThree();
 
-  texLoader = new THREE.TextureLoader();
+    texLoader = new THREE.TextureLoader();
 
-  // Step 2: Load all textures in parallel (images are already being preloaded
-  // by <link rel="preload"> so this is mostly a cache hit)
-  El.splashBar.style.width = '30%';
-  El.splashHint.textContent = 'Loading assets…';
+    // Step 2: Load all textures in parallel
+    El.splashBar.style.width = '30%';
+    El.splashHint.textContent = 'Loading assets…';
 
-  let loaded = 0;
-  const total = 2; // keeper + stadium (ball & logo are CSS/HTML, not Three.js textures)
-  const onProgress = () => {
-    loaded++;
-    El.splashBar.style.width = (30 + Math.round((loaded / total) * 40)) + '%';
-  };
+    let loaded = 0;
+    const total = 2;
+    const onProgress = () => {
+      loaded++;
+      El.splashBar.style.width = (30 + Math.round((loaded / total) * 40)) + '%';
+    };
 
-  const [keeperTex, stadiumTex] = await Promise.all([
-    loadTexture('assets/keeper.png').then(t  => { onProgress(); return t; }),
-    loadTexture('assets/stadium.png').then(t => { onProgress(); return t; }),
-  ]);
+    const [keeperTex, stadiumTex] = await Promise.all([
+      loadTexture('assets/keeper.png').then(t  => { onProgress(); return t; }),
+      loadTexture('assets/stadium.png').then(t => { onProgress(); return t; }),
+    ]);
 
-  // Step 3: Build the 3D scene (synchronous after textures are ready)
-  El.splashBar.style.width = '75%';
-  El.splashHint.textContent = 'Building AR scene…';
-  await preInitScene();
+    // Step 3: Build 3D scene
+    El.splashBar.style.width = '75%';
+    El.splashHint.textContent = 'Building AR scene…';
+    await preInitScene();
 
-  // Pass pre-loaded textures into builders (no extra requests)
-  buildKeeper(keeperTex);
-  addStadiumSprites(stadiumTex);
+    buildKeeper(keeperTex);
+    addStadiumSprites(stadiumTex);
 
-  El.splashBar.style.width = '100%';
-  El.splashHint.textContent = 'Ready!';
-  await new Promise(r => setTimeout(r, 300));
+    El.splashBar.style.width = '100%';
+    El.splashHint.textContent = 'Ready!';
+    await new Promise(r => setTimeout(r, 300));
 
-  El.splash.classList.add('screen-hidden');
-  El.regScreen.classList.remove('screen-hidden');
+    El.splash.classList.add('screen-hidden');
+    El.regScreen.classList.remove('screen-hidden');
+
+  } catch (err) {
+    console.error('[Yupi AR] Boot failed:', err);
+    showBootError(err.message || 'Failed to load. Please reload.');
+  }
 }
 
 /* ── Registration Logic ── */
@@ -587,4 +609,8 @@ let aimHold = null;
   el.addEventListener('touchend',   () => clearInterval(aimHold), {passive:true});
 });
 
-window.addEventListener('DOMContentLoaded', boot);
+window.addEventListener('DOMContentLoaded', () => boot().catch(err => {
+  console.error('[Yupi AR] Unhandled boot error:', err);
+  showBootError(err.message || 'Unexpected error. Please reload.');
+}));
+
