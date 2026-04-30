@@ -11,9 +11,9 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 /* ── CONFIG ── */
 const CFG = {
   TIME_LIMIT: 15, POINTS_PER_GOAL: 100,
-  GOAL_W: 1.8, GOAL_H: 0.9, GOAL_Z: -2.0,
-  BALL_Y: 0.1, BALL_Z: 0.55,
-  KEEPER_PATROL: 0.65, KEEPER_CYCLE: 2.2,
+  GOAL_W: 0.9, GOAL_H: 0.35, GOAL_Z: -1.2,
+  BALL_Y: 0.04, BALL_Z: 0.22,
+  KEEPER_PATROL: 0.3, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
 };
 
@@ -252,8 +252,8 @@ async function initScene() {
   renderer.domElement.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;';
   document.body.prepend(renderer.domElement);
 
-  camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,100);
-  camera.position.set(0,0.9,1.8); camera.lookAt(0,0.3,CFG.GOAL_Z);
+  camera = new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.01,50);
+  camera.position.set(0,0.45,0.9); camera.lookAt(0,0.1,CFG.GOAL_Z);
 
   scene = new THREE.Scene();
   scene.add(new THREE.AmbientLight(0xffffff,0.85));
@@ -316,24 +316,19 @@ function startFallbackSession() {
 
 
 function buildGround() {
-  const grass = new THREE.Mesh(
-    new THREE.PlaneGeometry(30,30),
-    new THREE.MeshLambertMaterial({color:0x2d7a27, transparent:true, opacity:0.88})
+  // Thin shadow-receiving disc — no opaque green plane; camera feed IS the floor
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.6, 48),
+    new THREE.ShadowMaterial({opacity: 0.18})
   );
-  grass.rotation.x=-Math.PI/2; grass.receiveShadow=true; gameGroup.add(grass);
+  disc.rotation.x = -Math.PI/2; disc.receiveShadow = true; gameGroup.add(disc);
 
+  // Ball placement ring
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.48,0.54,48),
-    new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:0.4})
+    new THREE.RingGeometry(0.1, 0.115, 48),
+    new THREE.MeshBasicMaterial({color:0xffffff, side:THREE.DoubleSide, transparent:true, opacity:0.5})
   );
-  ring.rotation.x=-Math.PI/2; ring.position.set(0,0.01,CFG.BALL_Z); gameGroup.add(ring);
-
-  const lm = new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.2});
-  const hw = CFG.GOAL_W/2+0.5;
-  gameGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-hw,0.01,CFG.GOAL_Z), new THREE.Vector3(-hw,0.01,CFG.BALL_Z+0.8),
-    new THREE.Vector3( hw,0.01,CFG.BALL_Z+0.8), new THREE.Vector3( hw,0.01,CFG.GOAL_Z),
-  ]), lm));
+  ring.rotation.x=-Math.PI/2; ring.position.set(0,0.001,CFG.BALL_Z); gameGroup.add(ring);
 }
 
 function buildTrajectoryDots() {
@@ -345,16 +340,15 @@ function buildTrajectoryDots() {
 }
 
 function addYupiBanner() {
-  const cvs=document.createElement('canvas'); cvs.width=1024; cvs.height=256;
+  const cvs=document.createElement('canvas'); cvs.width=512; cvs.height=128;
   const ctx=cvs.getContext('2d');
   ctx.fillStyle='#F7C948';
-  ctx.beginPath(); ctx.roundRect(0,0,1024,256,40); ctx.fill();
-  ctx.font='bold 190px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  // Colors: Y=red, u=blue, p=WHITE (yellow-on-yellow is invisible!), i=green
-  ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
-  const b=new THREE.Mesh(new THREE.PlaneGeometry(4.0,0.95),
+  ctx.beginPath(); ctx.roundRect(0,0,512,128,20); ctx.fill();
+  ctx.font='bold 96px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],90+i*110,64); });
+  const b=new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W * 1.1, 0.2),
     new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
-  b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); gameGroup.add(b);
+  b.position.set(0, CFG.GOAL_H + 0.08, CFG.GOAL_Z); gameGroup.add(b);
 }
 
 /* ── Confetti particles ── */
@@ -720,9 +714,9 @@ async function boot() {
     const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    // Reddie = 0.4m — clearly shorter than 0.9m goal post
-    normalizeFBXByHeight(reddieGLB, 0.4);
-    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.15);
+    // Reddie = ~80% of goal height so he fits inside goal frame
+    normalizeFBXByHeight(reddieGLB, CFG.GOAL_H * 0.8);
+    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.06);
     fixFBXMaterials(reddieGLB);
     if(reddieGLB.animations && reddieGLB.animations.length>0){
       mixer=new THREE.AnimationMixer(reddieGLB);
