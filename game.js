@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './firebase-db.js';
 
 /* ── CONFIG ── */
@@ -39,6 +40,12 @@ let renderer, scene, camera, clock;
 let ballMesh=null, keeperMesh=null, gawangMesh=null, mixer=null;
 let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=null;
 let confettiParticles=[];
+
+/* ── WebXR AR state ── */
+let gameGroup = null;       // all placeable scene objects live here
+let reticleMesh = null;     // gold ring shown on detected surface
+let xrHitTestSource = null, xrHitTestRequested = false;
+let isARMode = false, gamePlaced = false;
 
 /* ── Audio Engine (synthesized, no files) ── */
 let audioCtx=null;
@@ -132,12 +139,9 @@ async function preInitScene() {
   $('ar-container').appendChild(renderer.domElement);
 
   clock = new THREE.Clock();
-  camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
-  camera.position.set(0, 1.65, 3.8);
-  camera.lookAt(0, 0.8, CFG.GOAL_Z);
-
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0a1020);
+  gameGroup = new THREE.Group();
+  scene.add(gameGroup);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.85));
   const sun = new THREE.DirectionalLight(0xffffff, 1.3);
@@ -153,6 +157,51 @@ async function preInitScene() {
   addYupiBanner();
   buildConfettiPool();
 
+  // Detect WebXR AR support (Android Chrome + other browsers)
+  const xrSupported = navigator.xr
+    ? await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false)
+    : false;
+
+  if (xrSupported) {
+    // —— AR MODE: device camera + real plane detection ——
+    isARMode = true;
+    renderer.xr.enabled = true;
+    scene.background = null; // transparent → shows real camera
+    gameGroup.visible = false; // hidden until placed on floor
+
+    // Gold reticle ring shown on detected surface
+    const rg = new THREE.RingGeometry(0.12, 0.18, 32).rotateX(-Math.PI/2);
+    reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide}));
+    reticleMesh.matrixAutoUpdate = false;
+    reticleMesh.visible = false;
+    scene.add(reticleMesh);
+
+    // AR entry button (appended to body by Three.js helper)
+    const arBtn = ARButton.createButton(renderer, {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: document.body },
+    });
+    arBtn.id = 'ar-enter-btn'; arBtn.textContent = '📷 Enter AR';
+    document.body.appendChild(arBtn);
+
+    // Fixed camera for non-AR preview
+    camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
+
+    // Tap-to-place listener
+    renderer.domElement.addEventListener('click', xrPlaceGame);
+
+  } else {
+    // —— FALLBACK MODE: manual camera stream ——
+    isARMode = false;
+    scene.background = new THREE.Color(0x0a1020);
+    camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
+    camera.position.set(0, 1.65, 3.8);
+    camera.lookAt(0, 0.8, CFG.GOAL_Z);
+    gameGroup.visible = true;
+    gamePlaced = true;
+  }
+
   window.addEventListener('resize', () => {
     camera.aspect = innerWidth/innerHeight;
     camera.updateProjectionMatrix();
@@ -162,22 +211,34 @@ async function preInitScene() {
   renderLoop();
 }
 
+/* ── AR placement: called on tap when reticle is visible ── */
+function xrPlaceGame() {
+  if (!isARMode || gamePlaced || !reticleMesh || !reticleMesh.visible) return;
+  gameGroup.position.setFromMatrixPosition(reticleMesh.matrix);
+  gameGroup.visible = true;
+  gamePlaced = true;
+  reticleMesh.visible = false;
+  El.swipeHint.classList.remove('screen-hidden');
+  El.hud.classList.remove('screen-hidden');
+  startGame();
+}
+
 function buildGround() {
   const grass = new THREE.Mesh(
     new THREE.PlaneGeometry(30,30),
     new THREE.MeshLambertMaterial({color:0x2d7a27, transparent:true, opacity:0.88})
   );
-  grass.rotation.x=-Math.PI/2; grass.receiveShadow=true; scene.add(grass);
+  grass.rotation.x=-Math.PI/2; grass.receiveShadow=true; gameGroup.add(grass);
 
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.48,0.54,48),
     new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:0.4})
   );
-  ring.rotation.x=-Math.PI/2; ring.position.set(0,0.01,CFG.BALL_Z); scene.add(ring);
+  ring.rotation.x=-Math.PI/2; ring.position.set(0,0.01,CFG.BALL_Z); gameGroup.add(ring);
 
   const lm = new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.2});
   const hw = CFG.GOAL_W/2+0.5;
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+  gameGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(-hw,0.01,CFG.GOAL_Z), new THREE.Vector3(-hw,0.01,CFG.BALL_Z+0.8),
     new THREE.Vector3( hw,0.01,CFG.BALL_Z+0.8), new THREE.Vector3( hw,0.01,CFG.GOAL_Z),
   ]), lm));
@@ -187,7 +248,7 @@ function buildTrajectoryDots() {
   const mat = new THREE.MeshBasicMaterial({color:0xFFD700, transparent:true, opacity:0.8});
   for(let i=0; i<CFG.TRAJ_DOTS; i++){
     const d = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), mat.clone());
-    d.visible=false; scene.add(d); trajDots.push(d);
+    d.visible=false; gameGroup.add(d); trajDots.push(d);
   }
 }
 
@@ -201,7 +262,7 @@ function addYupiBanner() {
   ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
   const b=new THREE.Mesh(new THREE.PlaneGeometry(4.0,0.95),
     new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
-  b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); scene.add(b);
+  b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); gameGroup.add(b);
 }
 
 /* ── Confetti particles ── */
@@ -213,7 +274,7 @@ function buildConfettiPool() {
       new THREE.MeshBasicMaterial({color:colors[i%colors.length],side:THREE.DoubleSide,transparent:true})
     );
     m.visible=false; m.userData={vx:0,vy:0,vz:0,life:0};
-    scene.add(m); confettiParticles.push(m);
+    gameGroup.add(m); confettiParticles.push(m);
   }
 }
 
@@ -503,12 +564,45 @@ function generateShareCard() {
 
 /* ── Render loop ── */
 function renderLoop() {
-  requestAnimationFrame(renderLoop);
-  const dt=clock.getDelta();
-  if(ballMesh && !S.shooting) ballMesh.rotation.y+=0.008;
-  tickKeeper(dt);
-  tickConfetti();
-  renderer.render(scene,camera);
+  if (isARMode) {
+    // XR-aware loop: Three.js WebXR manager handles RAF
+    renderer.setAnimationLoop((timestamp, frame) => {
+      const dt = clock.getDelta();
+      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
+      tickKeeper(dt);
+      tickConfetti();
+      // Hit-test for floor reticle (only while waiting to place)
+      if (frame && !gamePlaced) {
+        const session = renderer.xr.getSession();
+        const refSpace = renderer.xr.getReferenceSpace();
+        if (!xrHitTestRequested) {
+          session.requestReferenceSpace('viewer').then(vs =>
+            session.requestHitTestSource({space: vs}).then(s => { xrHitTestSource = s; })
+          );
+          session.addEventListener('end', () => { xrHitTestSource=null; xrHitTestRequested=false; });
+          xrHitTestRequested = true;
+        }
+        if (xrHitTestSource) {
+          const hits = frame.getHitTestResults(xrHitTestSource);
+          if (hits.length > 0) {
+            reticleMesh.visible = true;
+            reticleMesh.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
+          } else { reticleMesh.visible = false; }
+        }
+      }
+      renderer.render(scene, camera);
+    });
+  } else {
+    // Standard loop for non-AR fallback
+    (function loop() {
+      requestAnimationFrame(loop);
+      const dt = clock.getDelta();
+      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
+      tickKeeper(dt);
+      tickConfetti();
+      renderer.render(scene, camera);
+    })();
+  }
 }
 
 /* ════════════════════════════════════════
@@ -561,7 +655,7 @@ async function boot() {
         });
       });
     }
-    scene.add(bolaFBX);
+    gameGroup.add(bolaFBX);
     ballMesh=bolaFBX;
 
     El.splashBar.style.width='28%';
@@ -573,7 +667,7 @@ async function boot() {
     normalizeFBXByHeight(gawangFBX, CFG.GOAL_H);
     gawangFBX.position.set(0, 0, CFG.GOAL_Z);
     fixFBXMaterials(gawangFBX);
-    scene.add(gawangFBX);
+    gameGroup.add(gawangFBX);
     gawangMesh=gawangFBX;
 
     El.splashBar.style.width='46%';
@@ -589,7 +683,7 @@ async function boot() {
       mixer=new THREE.AnimationMixer(reddieFBX);
       mixer.clipAction(reddieFBX.animations[0]).play();
     }
-    scene.add(reddieFBX);
+    gameGroup.add(reddieFBX);
     keeperMesh=reddieFBX;
 
     El.splashBar.style.width='95%';
