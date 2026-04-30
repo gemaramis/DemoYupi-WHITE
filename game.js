@@ -732,10 +732,26 @@ El.btnReg.onclick = async () => {
   El.btnReg.textContent='STARTING…'; El.btnReg.disabled=true;
   registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
-  // initScene must run here (inside user gesture) to get camera permission on mobile
-  await initScene();
+
+  // Show a loading cover so user never sees blank screen during camera init
+  const cover = Object.assign(document.createElement('div'), {
+    id:'cam-cover',
+    innerHTML:'<div style="text-align:center"><div style="font-size:48px">📷</div><div style="margin-top:12px;font-size:18px;font-weight:700">Starting camera…</div><div style="margin-top:8px;font-size:13px;opacity:.7">Allow camera access when prompted</div></div>',
+  });
+  cover.style.cssText='position:fixed;inset:0;background:#000;color:#FFD700;display:flex;align-items:center;justify-content:center;z-index:500;font-family:Plus Jakarta Sans,sans-serif';
+  document.body.appendChild(cover);
+
+  try {
+    await initScene();
+  } catch(err) {
+    cover.innerHTML=`<div style="text-align:center"><div style="font-size:36px">⚠️</div><div style="margin:12px 0;font-size:16px">${err.message||'Camera failed'}</div><button onclick="location.reload()" style="padding:10px 24px;background:#FFD700;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer">🔄 Retry</button></div>`;
+    return;
+  }
+
+  cover.remove();
   El.start.classList.remove('screen-hidden');
 };
+
 
 /* ── Leaderboard ── */
 $('btn-leaderboard').onclick = async () => {
