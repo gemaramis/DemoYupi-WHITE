@@ -369,7 +369,10 @@ function startXRSession() {
     yupiModule,
   ]);
 
-  XR8.run({canvas: renderer.domElement});
+  XR8.run({
+    canvas: renderer.domElement,
+    allowedDevices: XR8.XrConfig.device().ANY
+  });
 }
 
 /**
