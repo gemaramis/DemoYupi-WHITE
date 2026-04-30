@@ -369,6 +369,10 @@ function startXRSession() {
     yupiModule,
   ]);
 
+  XR8.XrController.configure({
+    disableWorldTracking: false,
+  });
+
   XR8.run({
     canvas: renderer.domElement,
     allowedDevices: XR8.XrConfig.device().ANY
