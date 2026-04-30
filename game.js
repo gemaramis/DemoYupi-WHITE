@@ -14,11 +14,15 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 
 /* ── CONFIG ── */
 const CFG = {
-  TIME_LIMIT: 15, POINTS_PER_GOAL: 100,
-  GOAL_W: 0.9, GOAL_H: 0.35, GOAL_Z: -1.2,
-  BALL_Y: 0.04, BALL_Z: 0.22,
-  KEEPER_PATROL: 0.3, KEEPER_CYCLE: 2.2,
+  TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
+  // Goal & gameplay sizing (tabletop AR — ~1:6 real-world scale)
+  GOAL_W: 1.2, GOAL_H: 0.55, GOAL_Z: -1.5,
+  BALL_Y: 0.06, BALL_Z: 0.30,
+  BALL_RADIUS: 0.16,
+  KEEPER_PATROL: 0.45, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
+  // Surface detection
+  SURFACE_CONFIDENCE_NEEDED: 25,  // frames before allowing placement
 };
 
 /* ── STATE ── */
@@ -45,6 +49,8 @@ let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=nu
 let confettiParticles=[];
 let gameGroup = new THREE.Group(); // pre-created; added to scene in onStart
 let reticleMesh=null, gamePlaced=false;
+let surfaceConfidence=0; // frames with stable surface hit
+let placementReady=false; // true when confidence >= threshold
 
 /* ── Audio Engine (synthesized, no files) ── */
 let audioCtx=null;
@@ -203,44 +209,92 @@ function buildGamePipelineModule() {
     onUpdate: () => {
       const dt = clock.getDelta();
       if (S.active) { tickKeeper(dt); tickConfetti(); if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008; }
-      // Live reticle via center-screen hit-test
+
+      // Surface confidence + color-coded reticle
       if (!gamePlaced) {
         try {
-          const hits = XR8.XrController.hitTest(0.5,0.5,['FEATURE_POINT','ESTIMATED_SURFACE']);
+          const hits = XR8.XrController.hitTest(0.5, 0.5, ['FEATURE_POINT','ESTIMATED_SURFACE']);
           if (hits.length > 0) {
-            reticleMesh.visible = true;
+            surfaceConfidence = Math.min(surfaceConfidence + 1, CFG.SURFACE_CONFIDENCE_NEEDED + 10);
+            placementReady = surfaceConfidence >= CFG.SURFACE_CONFIDENCE_NEEDED;
+
             const {position:p, rotation:r} = hits[0];
+            reticleMesh.visible = true;
             reticleMesh.matrix.compose(
-              new THREE.Vector3(p.x,p.y,p.z),
-              new THREE.Quaternion(r.x,r.y,r.z,r.w),
+              new THREE.Vector3(p.x, p.y, p.z),
+              new THREE.Quaternion(r.x, r.y, r.z, r.w),
               new THREE.Vector3(1,1,1)
             );
-          } else { reticleMesh.visible = false; }
-        } catch(_) {}
+            // Color: red → yellow → green based on confidence
+            const t = Math.min(surfaceConfidence / CFG.SURFACE_CONFIDENCE_NEEDED, 1);
+            const color = t < 0.5
+              ? new THREE.Color().lerpColors(new THREE.Color(0xFF4444), new THREE.Color(0xFFD60A), t*2)
+              : new THREE.Color().lerpColors(new THREE.Color(0xFFD60A), new THREE.Color(0x70E000), (t-0.5)*2);
+            reticleMesh.material.color = color;
+
+            // Update placement button label
+            const btn = document.getElementById('btn-place-confirm');
+            if (btn) {
+              if (placementReady) {
+                btn.textContent = '⚽ PLACE GOAL HERE';
+                btn.style.opacity = '1';
+                btn.style.pointerEvents = 'auto';
+              } else {
+                btn.textContent = `🔴 Scanning surface… ${Math.round(t*100)}%`;
+                btn.style.opacity = '0.65';
+                btn.style.pointerEvents = 'none';
+              }
+            }
+          } else {
+            surfaceConfidence = Math.max(surfaceConfidence - 2, 0);
+            reticleMesh.visible = false;
+          }
+        } catch(_) { reticleMesh.visible = false; }
       }
     },
   };
 }
 
-/** Tap handler — anchors gameGroup to detected floor surface. */
+/** Tap handler — anchors gameGroup to detected floor surface using multi-point average. */
 function onXR8Place(e) {
   if (gamePlaced) return;
+  if (!placementReady) return; // wait for surface confidence
   e.preventDefault && e.preventDefault();
-  const x=(e.touches?.[0]?.clientX??innerWidth/2)/innerWidth;
-  const y=(e.touches?.[0]?.clientY??innerHeight/2)/innerHeight;
-  try {
-    const hits = XR8.XrController.hitTest(x,y,['FEATURE_POINT','ESTIMATED_SURFACE']);
-    if (hits.length > 0) {
-      const {position:p, rotation:r} = hits[0];
-      gameGroup.position.set(p.x,p.y,p.z);
-      gameGroup.quaternion.set(r.x,r.y,r.z,r.w);
-      gameGroup.visible=true; gamePlaced=true; reticleMesh.visible=false;
-      document.getElementById('xr8-hint')?.remove();
-      El.hud.classList.remove('screen-hidden');
-      El.swipeHint.classList.remove('screen-hidden');
-      startGame();
-    }
-  } catch(ex) { console.error('XR8 place:', ex); }
+  const cx=(e.touches?.[0]?.clientX??innerWidth/2)/innerWidth;
+  const cy=(e.touches?.[0]?.clientY??innerHeight/2)/innerHeight;
+
+  // Multi-point hit-test: sample 5 points and average for stability
+  const offsets = [[0,0],[-.02,-.02],[.02,-.02],[-.02,.02],[.02,.02]];
+  const results = [];
+  for (const [ox,oy] of offsets) {
+    try {
+      const hits = XR8.XrController.hitTest(
+        Math.max(0.05, Math.min(0.95, cx+ox)),
+        Math.max(0.05, Math.min(0.95, cy+oy)),
+        ['FEATURE_POINT','ESTIMATED_SURFACE']
+      );
+      if (hits.length > 0) results.push(hits[0]);
+    } catch(_) {}
+  }
+
+  if (results.length > 0) {
+    // Average all hit positions for a more stable placement
+    const avg = results.reduce((acc,h) => {
+      acc.x += h.position.x; acc.y += h.position.y; acc.z += h.position.z;
+      return acc;
+    }, {x:0,y:0,z:0});
+    avg.x /= results.length; avg.y /= results.length; avg.z /= results.length;
+    // Use rotation from the center hit
+    const {rotation: r} = results[0];
+    gameGroup.position.set(avg.x, avg.y, avg.z);
+    gameGroup.quaternion.set(r.x, r.y, r.z, r.w);
+    gameGroup.visible=true; gamePlaced=true; reticleMesh.visible=false;
+    document.getElementById('xr8-hint')?.remove();
+    El.hud.classList.remove('screen-hidden');
+    El.swipeHint.classList.remove('screen-hidden');
+    addRepositionButton();
+    startGame();
+  }
 }
 
 /* ════════════════════════════════════════
@@ -423,28 +477,58 @@ function showPlacementUI(useHitTest) {
     }
 
     if (!placed) {
-      // Fallback: place 1.2m in front of camera at floor level
+      // Fallback: place 1.5m in front of camera at floor level
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
       gameGroup.position.set(
-        camera.position.x + fwd.x * 1.2,
-        camera.position.y - 0.4,  // estimate floor
-        camera.position.z + fwd.z * 1.2
+        camera.position.x + fwd.x * 1.5,
+        camera.position.y - 0.5,
+        camera.position.z + fwd.z * 1.5
       );
     }
 
     gameGroup.visible = true;
     gamePlaced = true;
+    surfaceConfidence = 0;
     if (reticleMesh) reticleMesh.visible = false;
     overlay.remove();
     El.hud.classList.remove('screen-hidden');
     El.swipeHint.classList.remove('screen-hidden');
+    addRepositionButton();
     startGame();
   };
 }
 
+/** Add a "🔄 Reposition" floating button during gameplay */
+function addRepositionButton() {
+  const existing = document.getElementById('btn-reposition');
+  if (existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.id = 'btn-reposition';
+  btn.textContent = '🔄 Reposition';
+  btn.style.cssText = `
+    position:fixed;top:66px;right:12px;z-index:200;
+    background:rgba(0,0,0,0.55);color:#FFD60A;border:1px solid rgba(255,214,10,0.4);
+    padding:8px 14px;border-radius:20px;font-size:12px;font-weight:700;
+    font-family:Plus Jakarta Sans,sans-serif;letter-spacing:0.05em;
+    cursor:pointer;backdrop-filter:blur(8px);
+  `;
+  btn.onclick = () => {
+    gamePlaced = false;
+    surfaceConfidence = 0;
+    placementReady = false;
+    gameGroup.visible = false;
+    if (reticleMesh) reticleMesh.visible = true;
+    S.active = false;
+    clearInterval(gameTimerInterval);
+    El.hud.classList.add('screen-hidden');
+    El.swipeHint.classList.add('screen-hidden');
+    El.gameover.classList.add('screen-hidden');
+    btn.remove();
+    showPlacementUI(true);
+  };
+  document.body.appendChild(btn);
+}
 
-
-function buildGround() {
   // Thin shadow-receiving disc — no opaque green plane; camera feed IS the floor
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(0.6, 48),
@@ -808,16 +892,16 @@ async function boot() {
     // Ball: always use a visible procedural sphere (bola.glb materials are unreliable)
     const ballGroup = new THREE.Group();
     const ballSphere = new THREE.Mesh(
-      new THREE.SphereGeometry(0.13, 32, 32),
+      new THREE.SphereGeometry(CFG.BALL_RADIUS, 32, 32),
       new THREE.MeshStandardMaterial({color:0xE31E24, roughness:0.35, metalness:0.05})
     );
     ballSphere.castShadow = true;
     // Black pentagon patches for soccer look
     const patchMat = new THREE.MeshStandardMaterial({color:0x111111, roughness:0.5});
     [0,60,120,180,240,300].forEach(deg => {
-      const patch = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), patchMat);
+      const patch = new THREE.Mesh(new THREE.SphereGeometry(CFG.BALL_RADIUS*0.28, 8, 8), patchMat);
       const r = Math.PI*deg/180;
-      patch.position.set(Math.cos(r)*0.11, 0.06, Math.sin(r)*0.11);
+      patch.position.set(Math.cos(r)*CFG.BALL_RADIUS*0.84, CFG.BALL_RADIUS*0.46, Math.sin(r)*CFG.BALL_RADIUS*0.84);
       ballGroup.add(patch);
     });
     ballGroup.add(ballSphere);
@@ -839,20 +923,33 @@ async function boot() {
     gawangMesh=gawangGLB;
 
     El.splashBar.style.width='46%';
-    El.splashHint.textContent='Loading Reddie…';
-    const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
+    El.splashHint.textContent='Loading Goalkeeper…';
+    const keeperGLB = await loadGLTF('assets/Goalkeeper.glb', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    // Reddie = ~80% of goal height so he fits inside goal frame
-    normalizeFBXByHeight(reddieGLB, CFG.GOAL_H * 0.8);
-    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.06);
-    fixFBXMaterials(reddieGLB);
-    if(reddieGLB.animations && reddieGLB.animations.length>0){
-      mixer=new THREE.AnimationMixer(reddieGLB);
-      mixer.clipAction(reddieGLB.animations[0]).play();
+    // Check if Goalkeeper.glb includes full scene (goal+keeper) based on bounding box
+    const keeperBox = new THREE.Box3().setFromObject(keeperGLB);
+    const keeperSize = new THREE.Vector3();
+    keeperBox.getSize(keeperSize);
+    const isFullScene = Math.max(keeperSize.x, keeperSize.z) > 1.5;
+
+    if (isFullScene) {
+      // Full scene GLB — normalize to goal width and hide gawang
+      normalizeFBX(keeperGLB, CFG.GOAL_W * 1.2);
+      keeperGLB.position.set(0, 0, CFG.GOAL_Z);
+      gawangGLB.visible = false; // Goalkeeper.glb has the goal frame built-in
+    } else {
+      // Keeper-only GLB — scale to ~90% of goal height
+      normalizeFBXByHeight(keeperGLB, CFG.GOAL_H * 0.9);
+      keeperGLB.position.set(0, 0, CFG.GOAL_Z + 0.08);
     }
-    gameGroup.add(reddieGLB);
-    keeperMesh=reddieGLB;
+    fixFBXMaterials(keeperGLB);
+    if (keeperGLB.animations && keeperGLB.animations.length > 0) {
+      mixer = new THREE.AnimationMixer(keeperGLB);
+      mixer.clipAction(keeperGLB.animations[0]).play();
+    }
+    gameGroup.add(keeperGLB);
+    keeperMesh = keeperGLB;
 
     El.splashBar.style.width='95%';
     El.splashHint.textContent='Almost ready…';
