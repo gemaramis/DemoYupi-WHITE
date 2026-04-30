@@ -430,24 +430,25 @@ function initSwipeControls(canvas) {
   document.addEventListener('touchmove',  onTM, {passive:false});
   document.addEventListener('touchend',   onTE, {passive:false});
   // Mouse fallback for desktop
-  document.addEventListener('mousedown', e=>onTS({touches:[e],preventDefault:()=>{}}));
-  document.addEventListener('mousemove', e=>{ if(e.buttons) onTM({touches:[e],preventDefault:()=>{}}); });
-  document.addEventListener('mouseup',   e=>onTE({changedTouches:[e],preventDefault:()=>{}}));
+  document.addEventListener('mousedown', e=>onTS({touches:[e],preventDefault:()=>e.preventDefault(),cancelable:e.cancelable,target:e.target}));
+  document.addEventListener('mousemove', e=>{ if(e.buttons) onTM({touches:[e],preventDefault:()=>e.preventDefault(),cancelable:e.cancelable}); });
+  document.addEventListener('mouseup',   e=>onTE({changedTouches:[e],preventDefault:()=>e.preventDefault(),cancelable:e.cancelable}));
   // Power canvas overlay
   El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight;
   powerCtx = El.powerCanvas.getContext('2d');
 }
 
 function onTS(e) {
-  e.preventDefault();
   if(!S.active||S.shooting) return;
+  if(e.target.closest('button')) return; // don't block button taps
+  if(e.cancelable) e.preventDefault();
   const t=e.touches[0]; touch0={x:t.clientX, y:t.clientY};
   if(El.swipeHint) El.swipeHint.classList.add('screen-hidden');
 }
 
 function onTM(e) {
-  e.preventDefault();
   if(!S.active||S.shooting||!touch0) return;
+  if(e.cancelable) e.preventDefault();
   const t=e.touches[0];
   const dx=t.clientX-touch0.x, dy=t.clientY-touch0.y;
   showTrajectory(dx,dy);
