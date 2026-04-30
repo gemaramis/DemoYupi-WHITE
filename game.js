@@ -4,6 +4,9 @@
  */
 "use strict";
 
+const APP_VERSION = '2.0.0-dev'; // staging build
+const APP_ENV    = 'staging';
+
 import * as THREE from 'three';
 window.THREE = THREE; // Provide global THREE for XR8
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
