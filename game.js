@@ -1,8 +1,11 @@
 /**
- * YUPI AR PENALTY SHOOTOUT v2 — game.js
+ * YUPI AR PENALTY SHOOTOUT v1 — game.js
  * Swipe-to-shoot | GLB assets | Three.js ES modules
  */
 "use strict";
+
+const APP_VERSION = '1.0.0';
+const APP_ENV    = 'production';
 
 import * as THREE from 'three';
 window.THREE = THREE; // Provide global THREE for XR8
