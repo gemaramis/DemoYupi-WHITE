@@ -11,9 +11,9 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 /* ── CONFIG ── */
 const CFG = {
   TIME_LIMIT: 15, POINTS_PER_GOAL: 100,
-  GOAL_W: 4.0, GOAL_H: 2.8, GOAL_Z: -5.5,
-  BALL_Y: 0.22, BALL_Z: 1.2,
-  KEEPER_PATROL: 1.6, KEEPER_CYCLE: 2.2,
+  GOAL_W: 1.8, GOAL_H: 0.9, GOAL_Z: -2.0,
+  BALL_Y: 0.1, BALL_Z: 0.55,
+  KEEPER_PATROL: 0.65, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
 };
 
@@ -248,8 +248,8 @@ async function startFallbackSession() {
     renderer.setSize(innerWidth,innerHeight);
     renderer.shadowMap.enabled=true;
     $('ar-container').appendChild(renderer.domElement);
-    camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,150);
-    camera.position.set(0,1.65,3.8); camera.lookAt(0,0.8,CFG.GOAL_Z);
+    camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,100);
+    camera.position.set(0,0.9,1.8); camera.lookAt(0,0.3,CFG.GOAL_Z);
     scene = new THREE.Scene(); scene.background=new THREE.Color(0x0a1020);
     scene.add(new THREE.AmbientLight(0xffffff,0.85));
     const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
@@ -641,24 +641,27 @@ async function boot() {
     El.splashHint.textContent='Initializing…';
     clock = new THREE.Clock(); // gameGroup already created at module level
 
-    El.splashBar.style.width='15%';
-    El.splashHint.textContent='Loading ball…';
-    const bolaGLB = await loadGLTF('assets/bola.glb', p=>{
-      El.splashBar.style.width=(15+p*10)+'%';
+    // Ball: always use a visible procedural sphere (bola.glb materials are unreliable)
+    const ballGroup = new THREE.Group();
+    const ballSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.13, 32, 32),
+      new THREE.MeshStandardMaterial({color:0xE31E24, roughness:0.35, metalness:0.05})
+    );
+    ballSphere.castShadow = true;
+    // Black pentagon patches for soccer look
+    const patchMat = new THREE.MeshStandardMaterial({color:0x111111, roughness:0.5});
+    [0,60,120,180,240,300].forEach(deg => {
+      const patch = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), patchMat);
+      const r = Math.PI*deg/180;
+      patch.position.set(Math.cos(r)*0.11, 0.06, Math.sin(r)*0.11);
+      ballGroup.add(patch);
     });
-    normalizeFBX(bolaGLB, 0.62);
-    bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    const ballMeshCount = fixFBXMaterials(bolaGLB);
-    if (ballMeshCount === 0) {
-      const fallback = new THREE.Mesh(
-        new THREE.SphereGeometry(0.31, 24, 24),
-        new THREE.MeshStandardMaterial({color:0xffd700, metalness:0.2, roughness:0.3})
-      );
-      bolaGLB.add(fallback);
-      console.warn('[Yupi] bola.glb had no meshes — using fallback sphere');
-    }
-    gameGroup.add(bolaGLB);
-    ballMesh=bolaGLB;
+    ballGroup.add(ballSphere);
+    ballGroup.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    ballGroup.castShadow = true;
+    gameGroup.add(ballGroup);
+    ballMesh = ballGroup;
+    El.splashBar.style.width = '25%';
 
     El.splashBar.style.width='28%';
     El.splashHint.textContent='Loading goal…';
@@ -676,8 +679,9 @@ async function boot() {
     const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    normalizeFBXByHeight(reddieGLB, CFG.GOAL_H * 0.7);
-    reddieGLB.position.set(0, 0, CFG.GOAL_Z+0.55);
+    // Reddie = 0.55m tall, slightly shorter than 0.9m goal
+    normalizeFBXByHeight(reddieGLB, 0.55);
+    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.2);
     fixFBXMaterials(reddieGLB);
     if(reddieGLB.animations && reddieGLB.animations.length>0){
       mixer=new THREE.AnimationMixer(reddieGLB);
