@@ -239,7 +239,118 @@ function onXR8Place(e) {
   } catch(ex) { console.error('XR8 place:', ex); }
 }
 
-/** Set up Three.js scene + camera stream — call from user gesture (registration). */
+/** 8th Wall AR Implementation */
+async function start8thWallSession() {
+  if (renderer) return;
+
+  const onStart = ({canvasWidth, canvasHeight}) => {
+    const {scene: s, camera: c, renderer: r} = XR8.Threejs.xrScene();
+    scene = s; camera = c; renderer = r;
+
+    renderer.shadowMap.enabled = true;
+
+    // Add lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+    sun.position.set(3, 12, 4);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(512, 512);
+    scene.add(sun);
+    const fill = new THREE.PointLight(0x4488ff, 0.5, 20);
+    fill.position.set(-3, 5, -3);
+    scene.add(fill);
+
+    // Initial game state: hidden until placed
+    gameGroup.visible = false;
+    gamePlaced = false;
+    scene.add(gameGroup);
+
+    buildGround();
+    buildTrajectoryDots();
+    addYupiBanner();
+    buildConfettiPool();
+
+    // Gold reticle for placement
+    const rg = new THREE.RingGeometry(0.12, 0.18, 32).rotateX(-Math.PI/2);
+    reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color: 0xFFD700, side: THREE.DoubleSide}));
+    scene.add(reticleMesh);
+
+    initSwipeControls();
+
+    // Tap to place
+    renderer.domElement.addEventListener('click', (e) => {
+      if (gamePlaced || !reticleMesh.visible) return;
+      
+      // Place gameGroup at reticle position
+      gameGroup.position.copy(reticleMesh.position);
+      gameGroup.quaternion.copy(reticleMesh.quaternion);
+      gameGroup.visible = true;
+      gamePlaced = true;
+      reticleMesh.visible = false;
+
+      // Hide placement instructions and start game
+      if (document.getElementById('place-hint')) {
+        document.getElementById('place-hint').remove();
+      }
+      El.hud.classList.remove('screen-hidden');
+      El.swipeHint.classList.remove('screen-hidden');
+      startGame();
+    });
+
+    window.addEventListener('resize', () => {
+      if (El.powerCanvas) {
+        El.powerCanvas.width = window.innerWidth;
+        El.powerCanvas.height = window.innerHeight;
+      }
+    });
+  };
+
+  const onUpdate = () => {
+    const dt = clock.getDelta();
+    if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
+    tickKeeper(dt);
+    tickConfetti();
+
+    // Hit test for reticle
+    if (!gamePlaced && reticleMesh) {
+      const result = XR8.XrController.hitTest(0.5, 0.5, ['featurePoint', 'estimatedSurface']);
+      if (result.length > 0) {
+        reticleMesh.visible = true;
+        reticleMesh.position.copy(result[0].position);
+        reticleMesh.quaternion.copy(result[0].rotation);
+      } else {
+        reticleMesh.visible = false;
+      }
+    }
+  };
+
+  XR8.addCameraPipelineModules([
+    XR8.GlTextureRenderer.pipelineModule(),
+    XR8.Threejs.pipelineModule(),
+    XR8.XrController.pipelineModule(),
+    XRExtras.AlmostThere.pipelineModule(),
+    XRExtras.FullWindowCanvas.pipelineModule(),
+    XRExtras.Loading.pipelineModule(),
+    XRExtras.RuntimeError.pipelineModule(),
+    {
+      name: 'yupi-game',
+      onStart,
+      onUpdate,
+    }
+  ]);
+
+  // Add placement hint UI
+  const hint = Object.assign(document.createElement('div'), {
+    id: 'place-hint',
+    innerHTML: 'Point camera at floor and TAP to place the goal!',
+  });
+  hint.style.cssText = 'position:fixed;bottom:20%;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.7);color:#fff;padding:12px 24px;border-radius:24px;z-index:100;font-family:sans-serif;pointer-events:none;text-align:center;';
+  document.body.appendChild(hint);
+
+  XR8.run({canvas: document.getElementById('ar-canvas')});
+}
+
+/** Set up Three.js scene + camera stream — fallback mode */
 async function initScene() {
   if (renderer) return; // already initialized
   renderer = new THREE.WebGLRenderer({antialias:false, alpha:true, powerPreference:'high-performance'});
@@ -764,14 +875,23 @@ El.btnReg.onclick = async () => {
   document.body.appendChild(cover);
 
   try {
-    await initScene();
+    if (window.XR8) {
+      await start8thWallSession();
+    } else {
+      await initScene();
+    }
   } catch(err) {
-    cover.innerHTML=`<div style="text-align:center"><div style="font-size:36px">⚠️</div><div style="margin:12px 0;font-size:16px">${err.message||'Camera failed'}</div><button onclick="location.reload()" style="padding:10px 24px;background:#FFD700;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer">🔄 Retry</button></div>`;
+    cover.innerHTML=`<div style="text-align:center"><div style="font-size:36px">⚠️</div><div style="margin:12px 0;font-size:16px">${err.message||'AR failed'}</div><button onclick="location.reload()" style="padding:10px 24px;background:#FFD700;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer">🔄 Retry</button></div>`;
     return;
   }
 
   cover.remove();
-  El.start.classList.remove('screen-hidden');
+  // For 8th Wall, we don't show the start screen yet; we show the placement hint
+  if (!window.XR8) {
+    El.start.classList.remove('screen-hidden');
+  } else {
+    // 8th Wall starts automatically, we just need to wait for it to be ready
+  }
 };
 
 
