@@ -76,19 +76,24 @@ function normalizeFBXByHeight(group, targetH) {
   group.position.y -= (center.y - h.y / 2);
 }
 
-/** Fix common FBX material issues (backface, transparency). */
+/** Fix common FBX material issues. Returns mesh count. */
 function fixFBXMaterials(group) {
+  let count = 0;
   group.traverse(c => {
     if (!c.isMesh) return;
+    count++;
     c.castShadow = true;
     c.receiveShadow = true;
     const mats = Array.isArray(c.material) ? c.material : [c.material];
     mats.forEach(m => {
       m.side = THREE.DoubleSide;
       m.depthWrite = true;
+      m.transparent = false;   // force opaque — FBX often exports transparent=true
+      m.opacity = 1;
       m.needsUpdate = true;
     });
   });
+  return count;
 }
 
 /* ════════════════════════════════════════
@@ -169,7 +174,8 @@ function addYupiBanner() {
   ctx.fillStyle='#F7C948';
   ctx.beginPath(); ctx.roundRect(0,0,1024,256,40); ctx.fill();
   ctx.font='bold 190px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ['#E31E24','#0055B3','#F7C948','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
+  // Colors: Y=red, u=blue, p=WHITE (yellow-on-yellow is invisible!), i=green
+  ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
   const b=new THREE.Mesh(new THREE.PlaneGeometry(4.0,0.95),
     new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
   b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); scene.add(b);
@@ -414,9 +420,28 @@ async function boot() {
     const bolaFBX = await loadFBX('assets/bola.fbx', p=>{
       El.splashBar.style.width=(15+p*10)+'%';
     });
-    normalizeFBX(bolaFBX, 0.44);
+    // Normalize to 0.62 diameter (bigger = more visible)
+    normalizeFBX(bolaFBX, 0.62);
     bolaFBX.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    fixFBXMaterials(bolaFBX);
+    const ballMeshCount = fixFBXMaterials(bolaFBX);
+    // If FBX had no visible geometry, use a bright fallback sphere
+    if (ballMeshCount === 0) {
+      const fallback = new THREE.Mesh(
+        new THREE.SphereGeometry(0.31, 24, 24),
+        new THREE.MeshStandardMaterial({color:0xffd700, metalness:0.1, roughness:0.4})
+      );
+      bolaFBX.add(fallback);
+      console.warn('[Yupi] bola.fbx had no meshes — using fallback sphere');
+    } else {
+      // Boost emissive so ball is visible even in low light
+      bolaFBX.traverse(c => {
+        if (!c.isMesh) return;
+        const mats = Array.isArray(c.material) ? c.material : [c.material];
+        mats.forEach(m => {
+          if (m.emissive) { m.emissive.set(0x222200); m.emissiveIntensity = 0.4; }
+        });
+      });
+    }
     scene.add(bolaFBX);
     ballMesh=bolaFBX;
 
