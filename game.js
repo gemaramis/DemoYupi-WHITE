@@ -283,12 +283,32 @@ async function initScene() {
   })();
 }
 
-/** Fallback for browsers without XR8 (manual camera stream, fixed camera). */
-async function startFallbackSession() {
+/** Placement step: user points camera at floor and taps to confirm. */
+function startFallbackSession() {
   El.start.classList.add('screen-hidden');
-  El.hud.classList.remove('screen-hidden');
-  El.swipeHint.classList.remove('screen-hidden');
-  startGame();
+
+  // Build placement overlay
+  const overlay = Object.assign(document.createElement('div'),{
+    id:'place-overlay',
+    innerHTML:`
+      <div style="text-align:center;padding:24px">
+        <div style="font-size:52px;margin-bottom:12px">🎯</div>
+        <div style="font-size:22px;font-weight:800;color:#FFD700;margin-bottom:8px">Place Your Goal</div>
+        <div style="font-size:14px;color:rgba(255,255,255,.8);margin-bottom:28px;line-height:1.6">
+          Point your camera at a flat surface<br>then tap the button below
+        </div>
+        <button id="btn-place-confirm" style="padding:14px 36px;background:#E31E24;color:#fff;border:none;border-radius:32px;font-size:18px;font-weight:800;font-family:Plus Jakarta Sans,sans-serif;letter-spacing:.5px;box-shadow:0 4px 20px rgba(227,30,36,.5);cursor:pointer">⚽ PLACE GOAL HERE</button>
+      </div>`,
+  });
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:200;backdrop-filter:blur(2px)';
+  document.body.appendChild(overlay);
+
+  document.getElementById('btn-place-confirm').onclick = () => {
+    overlay.remove();
+    El.hud.classList.remove('screen-hidden');
+    El.swipeHint.classList.remove('screen-hidden');
+    startGame();
+  };
 }
 
 
@@ -405,16 +425,15 @@ function tickKeeper(dt) {
    SWIPE CONTROLS
 ════════════════════════════════════════ */
 function initSwipeControls(canvas) {
-  const cvs = canvas || renderer?.domElement;
-  if (!cvs) return;
-  cvs.addEventListener('touchstart', onTS, {passive:false});
-  cvs.addEventListener('touchmove',  onTM, {passive:false});
-  cvs.addEventListener('touchend',   onTE, {passive:false});
+  // Attach to document so UI overlay z-index never blocks swipe touches
+  document.addEventListener('touchstart', onTS, {passive:false});
+  document.addEventListener('touchmove',  onTM, {passive:false});
+  document.addEventListener('touchend',   onTE, {passive:false});
   // Mouse fallback for desktop
-  cvs.addEventListener('mousedown', e => onTS({touches:[e],preventDefault:()=>{}}));
-  cvs.addEventListener('mousemove', e => { if(e.buttons) onTM({touches:[e],preventDefault:()=>{}}); });
-  cvs.addEventListener('mouseup',   e => onTE({changedTouches:[e],preventDefault:()=>{}}));
-  // Power canvas
+  document.addEventListener('mousedown', e=>onTS({touches:[e],preventDefault:()=>{}}));
+  document.addEventListener('mousemove', e=>{ if(e.buttons) onTM({touches:[e],preventDefault:()=>{}}); });
+  document.addEventListener('mouseup',   e=>onTE({changedTouches:[e],preventDefault:()=>{}}));
+  // Power canvas overlay
   El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight;
   powerCtx = El.powerCanvas.getContext('2d');
 }
@@ -698,9 +717,9 @@ async function boot() {
     const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    // Reddie = 0.55m tall, slightly shorter than 0.9m goal
-    normalizeFBXByHeight(reddieGLB, 0.55);
-    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.2);
+    // Reddie = 0.4m — clearly shorter than 0.9m goal post
+    normalizeFBXByHeight(reddieGLB, 0.4);
+    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.15);
     fixFBXMaterials(reddieGLB);
     if(reddieGLB.animations && reddieGLB.animations.length>0){
       mixer=new THREE.AnimationMixer(reddieGLB);
