@@ -1,618 +1,481 @@
 /**
- * YUPI AR PENALTY SHOOTOUT — game.js
- * Three.js | Ground-placed AR | Yupi branding
+ * YUPI AR PENALTY SHOOTOUT v2 — game.js
+ * Swipe-to-shoot | FBX assets | Three.js ES modules
  */
 "use strict";
 
-import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from "./firebase-db.js";
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './firebase-db.js';
 
 /* ── CONFIG ── */
 const CFG = {
-  TIME_LIMIT: 60,
-  POINTS_PER_GOAL: 100,
-  GOAL_W: 3.8, GOAL_H: 2.2, GOAL_Z: -7,
-  BALL_Y: 0.22, BALL_Z: 0,
-  KEEPER_RANGE: 1.5, KEEPER_SPEED: 0.03,
-  AIM_STEP: 0.35, MAX_AIM: 1.7,
-  SHOOT_MS: 700,
+  TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
+  GOAL_W: 3.6, GOAL_H: 2.4, GOAL_Z: -5.5,
+  BALL_Y: 0.25, BALL_Z: 1.2,
+  KEEPER_PATROL: 1.6, KEEPER_CYCLE: 2.2,
+  SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
 };
 
 /* ── STATE ── */
-const S = { goals:0, saves:0, points:0, timeRemaining:CFG.TIME_LIMIT, shooting:false, active:false, aimX:0 };
+const S = { goals:0, saves:0, points:0, timeRemaining:CFG.TIME_LIMIT, shooting:false, active:false };
 
 /* ── DOM ── */
 const $ = id => document.getElementById(id);
 const El = {
-  splash: $('splash'), splashBar: $('splash-bar'), splashHint: $('splash-hint'),
-  start: $('start-screen'), hud: $('hud'), feedback: $('feedback'),
-  fbEmoji: $('feedback-emoji'), fbText: $('feedback-text'),
-  gameover: $('gameover'), aim: $('aim-indicator'),
-  scoreYou: $('score-you'), scoreCandy: $('score-candy'),
-  shotsPips: $('shots-pips'), goGoals: $('go-goals'),
-  goTotal: $('go-total'), goTitle: $('go-title'), goRating: $('go-rating'),
-  hudTimer: $('hud-timer'),
-  
-  // Registration
-  regScreen: $('registration-screen'), btnReg: $('btn-submit-reg'),
-  regName: $('reg-name'),
-  
-  // Leaderboard
-  lbScreen: $('leaderboard-screen'), lbList: $('lb-list'), lbMyRow: $('lb-my-row'), btnCloseLb: $('btn-close-lb')
+  splash:$('splash'), splashBar:$('splash-bar'), splashHint:$('splash-hint'),
+  start:$('start-screen'), hud:$('hud'),
+  feedback:$('feedback'), fbEmoji:$('feedback-emoji'), fbText:$('feedback-text'),
+  gameover:$('gameover'), scoreYou:$('score-you'), scoreCandy:$('score-candy'),
+  goGoals:$('go-goals'), goTotal:$('go-total'), goTitle:$('go-title'), goRating:$('go-rating'),
+  hudTimer:$('hud-timer'),
+  regScreen:$('registration-screen'), btnReg:$('btn-submit-reg'), regName:$('reg-name'),
+  lbScreen:$('leaderboard-screen'), lbList:$('lb-list'), lbMyRow:$('lb-my-row'), btnCloseLb:$('btn-close-lb'),
+  swipeHint:$('swipe-hint'), powerCanvas:$('power-canvas'),
 };
 
-/* ── THREE ── */
-let renderer, scene, camera, ball, keeper, keeperTarget = 0, keeperTimer = 0;
-let texLoader;
+/* ── THREE SCENE ── */
+let renderer, scene, camera, clock;
+let ballMesh=null, keeperMesh=null, gawangMesh=null, mixer=null;
+let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=null;
 
-/**
- * Wait until the defer-loaded THREE global is available.
- * Typically resolves in <50 ms after DOMContentLoaded fires.
- */
-function waitForThree() {
-  return new Promise(resolve => {
-    if (typeof THREE !== 'undefined') { resolve(); return; }
-    const iv = setInterval(() => {
-      if (typeof THREE !== 'undefined') { clearInterval(iv); resolve(); }
-    }, 30);
+/* ════════════════════════════════════════
+   FBX HELPERS
+════════════════════════════════════════ */
+function loadFBX(url, onPct) {
+  return new Promise((resolve, reject) => {
+    const loader = new FBXLoader();
+    loader.load(url, resolve, xhr => onPct && onPct(xhr.loaded / (xhr.total || 1)), reject);
   });
 }
 
-/** Promisify THREE.TextureLoader.load so we can await it. */
-function loadTexture(url) {
-  return new Promise((resolve, reject) =>
-    texLoader.load(url, resolve, undefined, reject)
-  );
+function normalizeFBX(group, targetSize) {
+  const box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const sc = targetSize / Math.max(size.x, size.y, size.z);
+  group.scale.setScalar(sc);
+  box.setFromObject(group);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const h = new THREE.Vector3(); box.getSize(h);
+  group.position.y -= (center.y - h.y / 2);
 }
 
 /* ════════════════════════════════════════
-   PHASE 1: Pre-build scene (no camera) — called during splash
+   SCENE INIT
 ════════════════════════════════════════ */
 async function preInitScene() {
-  // Catch WebGL init failures explicitly
   try {
-    renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
-  } catch (e) {
-    throw new Error('WebGL failed to start. Try a different browser or enable hardware acceleration. (' + e.message + ')');
-  }
+    renderer = new THREE.WebGLRenderer({ antialias:false, alpha:true, powerPreference:'high-performance' });
+  } catch(e) { throw new Error('WebGL unavailable: ' + e.message); }
 
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   $('ar-container').appendChild(renderer.domElement);
 
-  camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
-  camera.position.set(0, 1.6, 3.5);
-  camera.lookAt(0, 1, CFG.GOAL_Z);
+  clock = new THREE.Clock();
+  camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
+  camera.position.set(0, 1.65, 3.8);
+  camera.lookAt(0, 0.8, CFG.GOAL_Z);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1020);
 
-  // Lights
-  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-  sun.position.set(3, 10, 3); sun.castShadow = true;
-  sun.shadow.mapSize.set(512, 512); // was 1024 — halved for performance
-  scene.add(sun);
-  const fillLight = new THREE.PointLight(0x4488ff, 0.6, 20);
-  fillLight.position.set(-3, 4, -3);
-  scene.add(fillLight);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+  sun.position.set(3, 12, 4); sun.castShadow=true;
+  sun.shadow.mapSize.set(512,512); scene.add(sun);
+  const fill = new THREE.PointLight(0x4488ff, 0.5, 25);
+  fill.position.set(-3,5,-3); scene.add(fill);
+  const rim = new THREE.PointLight(0xffaa33, 0.4, 20);
+  rim.position.set(3,4,4); scene.add(rim);
 
-  buildGround(); buildGoal(); buildBall();
+  buildGround();
+  buildTrajectoryDots();
   addYupiBanner();
 
   window.addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
+    camera.aspect = innerWidth/innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    if(El.powerCanvas){ El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight; }
   });
-
   renderLoop();
 }
 
+function buildGround() {
+  const grass = new THREE.Mesh(
+    new THREE.PlaneGeometry(30,30),
+    new THREE.MeshLambertMaterial({color:0x2d7a27, transparent:true, opacity:0.88})
+  );
+  grass.rotation.x=-Math.PI/2; grass.receiveShadow=true; scene.add(grass);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.48,0.54,48),
+    new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:0.4})
+  );
+  ring.rotation.x=-Math.PI/2; ring.position.set(0,0.01,CFG.BALL_Z); scene.add(ring);
+
+  const lm = new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.2});
+  const hw = CFG.GOAL_W/2+0.5;
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-hw,0.01,CFG.GOAL_Z), new THREE.Vector3(-hw,0.01,CFG.BALL_Z+0.8),
+    new THREE.Vector3( hw,0.01,CFG.BALL_Z+0.8), new THREE.Vector3( hw,0.01,CFG.GOAL_Z),
+  ]), lm));
+}
+
+function buildTrajectoryDots() {
+  const mat = new THREE.MeshBasicMaterial({color:0xFFD700, transparent:true, opacity:0.8});
+  for(let i=0; i<CFG.TRAJ_DOTS; i++){
+    const d = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), mat.clone());
+    d.visible=false; scene.add(d); trajDots.push(d);
+  }
+}
+
+function addYupiBanner() {
+  const cvs=document.createElement('canvas'); cvs.width=1024; cvs.height=256;
+  const ctx=cvs.getContext('2d');
+  ctx.fillStyle='#F7C948';
+  ctx.beginPath(); ctx.roundRect(0,0,1024,256,40); ctx.fill();
+  ctx.font='bold 190px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ['#E31E24','#0055B3','#F7C948','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
+  const b=new THREE.Mesh(new THREE.PlaneGeometry(3.8,0.95),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
+  b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); scene.add(b);
+}
+
+function addStadiumSprite(tex) {
+  if(!tex) return;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,opacity:0.55}));
+  s.scale.set(28,9,1); s.position.set(0,5.5,-18); scene.add(s);
+}
+
 /* ════════════════════════════════════════
-   PHASE 2: Attach camera feed — called after user gesture
+   CAMERA STREAM
 ════════════════════════════════════════ */
 async function initCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      // 720p is sufficient for WebAR and requests faster on mobile
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
+      video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}, audio:false
     });
-    const vid = Object.assign(document.createElement('video'), {
-      srcObject: stream, playsInline: true, muted: true, autoplay: true
-    });
-    await vid.play().catch(e => console.warn('Video play prevented:', e));
+    const vid = Object.assign(document.createElement('video'),
+      {srcObject:stream, playsInline:true, muted:true, autoplay:true});
+    await vid.play().catch(e=>console.warn('video play blocked',e));
     const vt = new THREE.VideoTexture(vid);
     vt.minFilter = THREE.LinearFilter;
     scene.background = vt;
-  } catch (e) {
-    console.warn('Camera access denied, using dark background:', e);
-  }
-}
-
-/* ── Ground ── */
-function buildGround() {
-  // Grass base
-  const grass = new THREE.Mesh(
-    new THREE.PlaneGeometry(20, 20),
-    new THREE.MeshLambertMaterial({ color:0x2e7d32, transparent:true, opacity:0.85 })
-  );
-  grass.rotation.x = -Math.PI/2; grass.position.y = 0; grass.receiveShadow = true;
-  scene.add(grass);
-
-  // Penalty spot circle
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.55, 0.62, 48),
-    new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide, transparent:true, opacity:0.5 })
-  );
-  ring.rotation.x = -Math.PI/2; ring.position.set(0, 0.01, CFG.BALL_Z);
-  scene.add(ring);
-
-  // Field lines
-  const lineMat = new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.3 });
-  const pts = [
-    new THREE.Vector3(-CFG.GOAL_W/2, 0.01, CFG.GOAL_Z),
-    new THREE.Vector3(-CFG.GOAL_W/2, 0.01, 2.5),
-    new THREE.Vector3( CFG.GOAL_W/2, 0.01, 2.5),
-    new THREE.Vector3( CFG.GOAL_W/2, 0.01, CFG.GOAL_Z),
-  ];
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
-}
-
-/* ── Goal ── */
-function buildGoal() {
-  const postMat = new THREE.MeshStandardMaterial({ color:0xffffff, metalness:0.5, roughness:0.3 });
-  const r = 0.07, h = CFG.GOAL_H, w = CFG.GOAL_W, z = CFG.GOAL_Z;
-
-  const mkBox = (sx,sy,sz,x,y,zp) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), postMat);
-    m.position.set(x,y,zp); m.castShadow=true; scene.add(m);
-  };
-  mkBox(r, h, r, -w/2, h/2, z);       // left post
-  mkBox(r, h, r,  w/2, h/2, z);       // right post
-  mkBox(w+r, r, r, 0, h, z);          // crossbar
-  mkBox(r, r, 0.5, -w/2, h/2, z-0.25); // left side bar
-  mkBox(r, r, 0.5,  w/2, h/2, z-0.25); // right side bar
-
-  // Net
-  const netMat = new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, transparent:true, opacity:0.18 });
-  const net = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.6), netMat);
-  net.position.set(0, h/2, z-0.3); scene.add(net);
-}
-
-/* ── Ball (canvas-textured sphere) ── */
-function buildBall() {
-  const cvs = document.createElement('canvas');
-  cvs.width = cvs.height = 512;
-  const ctx = cvs.getContext('2d');
-
-  // Sections: red, yellow, blue, green, orange, white
-  const colors = ['#E31E24','#F7C948','#0055B3','#00A34A','#FF6D00','#ffffff'];
-  const slices = colors.length;
-  for (let i=0; i<slices; i++) {
-    ctx.beginPath();
-    ctx.moveTo(256,256);
-    ctx.arc(256,256,256, (i/slices)*Math.PI*2, ((i+1)/slices)*Math.PI*2);
-    ctx.fillStyle = colors[i]; ctx.fill();
-  }
-  // Black seam lines
-  ctx.strokeStyle='#111'; ctx.lineWidth=8;
-  for (let i=0; i<slices; i++) {
-    ctx.beginPath();
-    ctx.moveTo(256,256);
-    ctx.lineTo(256+260*Math.cos((i/slices)*Math.PI*2), 256+260*Math.sin((i/slices)*Math.PI*2));
-    ctx.stroke();
-  }
-  ctx.beginPath(); ctx.arc(256,256,252,0,Math.PI*2); ctx.stroke();
-
-  ball = new THREE.Mesh(
-    new THREE.SphereGeometry(0.22, 32, 32),
-    new THREE.MeshStandardMaterial({ map: new THREE.CanvasTexture(cvs), metalness:0.05, roughness:0.6 })
-  );
-  ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-  ball.castShadow = true;
-  scene.add(ball);
-}
-
-function buildKeeper(keeperTex) {
-  const blue = new THREE.MeshStandardMaterial({ color:0x1565C0, metalness:0.1, roughness:0.3 });
-  const dk   = new THREE.MeshStandardMaterial({ color:0x0D47A1, metalness:0.1, roughness:0.3 });
-  const eye  = new THREE.MeshStandardMaterial({ color:0x111111 });
-
-  const g = new THREE.Group();
-  // Body
-  g.add(mkM(new THREE.SphereGeometry(0.38,16,16), blue, 0,0.38,0));
-  // Head
-  g.add(mkM(new THREE.SphereGeometry(0.29,16,16), blue, 0,0.98,0));
-  // Ears
-  g.add(mkM(new THREE.SphereGeometry(0.1,8,8), dk, -0.24,1.22,0));
-  g.add(mkM(new THREE.SphereGeometry(0.1,8,8), dk,  0.24,1.22,0));
-  // Eyes
-  g.add(mkM(new THREE.SphereGeometry(0.055,8,8), eye, -0.1,1.01,0.25));
-  g.add(mkM(new THREE.SphereGeometry(0.055,8,8), eye,  0.1,1.01,0.25));
-  // Arms stretched wide
-  const armG = new THREE.SphereGeometry(0.13,8,8);
-  const armL = mkM(armG, blue, -0.65,0.48,0); armL.scale.x=2.2; g.add(armL);
-  const armR = mkM(armG, blue,  0.65,0.48,0); armR.scale.x=2.2; g.add(armR);
-  // Legs
-  g.add(mkM(new THREE.SphereGeometry(0.15,8,8), blue, -0.18,-0.12,0));
-  g.add(mkM(new THREE.SphereGeometry(0.15,8,8), blue,  0.18,-0.12,0));
-
-  g.position.set(0, 0, CFG.GOAL_Z + 0.55);
-  g.scale.set(1.05,1.05,1.05);
-  scene.add(g);
-  keeper = g;
-
-  // Use pre-loaded texture (no extra network request during game start)
-  if (keeperTex) {
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:keeperTex, transparent:true, alphaTest:0.1 }));
-    spr.scale.set(2.2, 2.8, 1);
-    spr.position.set(0, 1.1, 0);
-    g.add(spr);
-  }
-}
-
-function mkM(geo, mat, x, y, z) {
-  const m = new THREE.Mesh(geo, mat);
-  m.position.set(x,y,z); m.castShadow=true; return m;
-}
-
-/* ── Yupi Banner behind goal ── */
-function addYupiBanner() {
-  const cvs = document.createElement('canvas');
-  cvs.width=1024; cvs.height=256;
-  const ctx = cvs.getContext('2d');
-  // Yellow background
-  ctx.fillStyle='#F7C948';
-  roundRect(ctx, 0,0,1024,256,40);
-  // Yupi text
-  ctx.font='bold 200px Fredoka One,Arial';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ['#E31E24','#0055B3','#F7C948','#00A34A'].forEach((c,i) => {
-    ctx.fillStyle=c;
-    ctx.fillText(['Y','u','p','i'][i], 200+i*220, 130);
-  });
-  const banner = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.6, 0.9),
-    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cvs), side:THREE.DoubleSide })
-  );
-  banner.position.set(0, CFG.GOAL_H+0.55, CFG.GOAL_Z);
-  scene.add(banner);
-
-  // Yupi side boards
-  [[-2.4, '#E31E24'], [2.4, '#0055B3']].forEach(([x, col]) => {
-    const bc = document.createElement('canvas'); bc.width=512; bc.height=128;
-    const bx = bc.getContext('2d');
-    bx.fillStyle=col; bx.fillRect(0,0,512,128);
-    bx.fillStyle='#fff'; bx.font='bold 90px Fredoka One,Arial';
-    bx.textAlign='center'; bx.textBaseline='middle';
-    bx.fillText('Yupi',256,64);
-    const sb = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.4,0.35),
-      new THREE.MeshBasicMaterial({ map:new THREE.CanvasTexture(bc), side:THREE.DoubleSide })
-    );
-    sb.position.set(x, 0.5, CFG.GOAL_Z);
-    scene.add(sb);
-  });
-}
-
-function roundRect(ctx,x,y,w,h,r){
-  ctx.beginPath(); ctx.moveTo(x+r,y);
-  ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
-  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
-  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
-  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
-  ctx.closePath(); ctx.fill();
-}
-
-/* ── Stadium crowd billboards ── */
-function addStadiumSprites(stadiumTex) {
-  if (!stadiumTex) return;
-  const mat = new THREE.SpriteMaterial({ map:stadiumTex, transparent:true, opacity:0.6 });
-  const s = new THREE.Sprite(mat);
-  s.scale.set(24, 8, 1);
-  s.position.set(0, 5, -16);
-  scene.add(s);
+  } catch(e) { console.warn('Camera denied:', e); }
 }
 
 /* ════════════════════════════════════════
    KEEPER AI
 ════════════════════════════════════════ */
-function tickKeeper() {
-  if (!S.active || S.shooting) return;
-  keeperTimer--;
-  if (keeperTimer <= 0) {
-    keeperTarget = (Math.random()-0.5) * CFG.KEEPER_RANGE * 2;
-    keeperTimer = 50 + Math.floor(Math.random()*80);
-  }
-  keeper.position.x += (keeperTarget - keeper.position.x) * CFG.KEEPER_SPEED;
-
-  // Arm wave
-  const t = Date.now() * 0.004;
-  if (keeper.children[5]) keeper.children[5].rotation.z =  Math.sin(t) * 0.3;
-  if (keeper.children[6]) keeper.children[6].rotation.z = -Math.sin(t) * 0.3;
+function tickKeeper(dt) {
+  if(!S.active) return;
+  keeperPhase += dt;
+  if(keeperMesh) keeperMesh.position.x = Math.sin(keeperPhase*(Math.PI*2/CFG.KEEPER_CYCLE))*CFG.KEEPER_PATROL;
+  if(mixer) mixer.update(dt);
 }
 
 /* ════════════════════════════════════════
-   AIMING & SHOOTING
+   SWIPE CONTROLS
 ════════════════════════════════════════ */
-function aimLeft()  { S.aimX = Math.max(-CFG.MAX_AIM, S.aimX - CFG.AIM_STEP); updateAimIndicator(); }
-function aimRight() { S.aimX = Math.min( CFG.MAX_AIM, S.aimX + CFG.AIM_STEP); updateAimIndicator(); }
-
-function updateAimIndicator() {
-  const pct = (S.aimX + CFG.MAX_AIM) / (CFG.MAX_AIM*2);
-  El.aim.style.left = (15 + pct*70) + '%';
+function initSwipeControls() {
+  const cvs = renderer.domElement;
+  cvs.addEventListener('touchstart', onTS, {passive:false});
+  cvs.addEventListener('touchmove',  onTM, {passive:false});
+  cvs.addEventListener('touchend',   onTE, {passive:false});
+  // Mouse fallback for desktop
+  cvs.addEventListener('mousedown', e => onTS({touches:[e],preventDefault:()=>{}}));
+  cvs.addEventListener('mousemove', e => { if(e.buttons) onTM({touches:[e],preventDefault:()=>{}}); });
+  cvs.addEventListener('mouseup',   e => onTE({changedTouches:[e],preventDefault:()=>{}}));
+  // Power canvas
+  El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight;
+  powerCtx = El.powerCanvas.getContext('2d');
 }
 
-function shoot() {
-  if (!S.active || S.shooting || S.timeRemaining <= 0) return;
-  S.shooting = true;
+function onTS(e) {
+  e.preventDefault();
+  if(!S.active||S.shooting) return;
+  const t=e.touches[0]; touch0={x:t.clientX, y:t.clientY};
+  if(El.swipeHint) El.swipeHint.classList.add('screen-hidden');
+}
 
-  const tx = S.aimX;
-  const ty = CFG.GOAL_H * (0.3 + Math.random()*0.55);
-  const tz = CFG.GOAL_Z;
-  const sx = ball.position.x, sy = ball.position.y, sz = ball.position.z;
-  const t0 = performance.now();
+function onTM(e) {
+  e.preventDefault();
+  if(!S.active||S.shooting||!touch0) return;
+  const t=e.touches[0];
+  const dx=t.clientX-touch0.x, dy=t.clientY-touch0.y;
+  showTrajectory(dx,dy);
+  drawPowerRing(Math.min(Math.hypot(dx,dy)/CFG.MAX_SWIPE,1));
+}
 
-  (function fly(now) {
-    const t = Math.min((now-t0)/CFG.SHOOT_MS, 1);
-    const e = t<0.5 ? 2*t*t : -1+(4-2*t)*t;
-    ball.position.set(
-      sx+(tx-sx)*e,
-      sy+(ty-sy)*e + Math.sin(t*Math.PI)*0.5,
-      sz+(tz-sz)*e
+function onTE(e) {
+  if(!S.active||S.shooting||!touch0) return;
+  const t=e.changedTouches[0];
+  const dx=t.clientX-touch0.x, dy=t.clientY-touch0.y;
+  const mag=Math.hypot(dx,dy);
+  touch0=null; clearTrajectory(); clearPowerRing();
+  if(mag>15) {
+    const power=Math.min(mag/CFG.MAX_SWIPE,1);
+    const aimX=Math.max(-CFG.GOAL_W/2, Math.min(CFG.GOAL_W/2, (dx/CFG.MAX_SWIPE)*(CFG.GOAL_W*0.6)));
+    const aimY=CFG.GOAL_H*(0.2+Math.max(0,-dy/CFG.MAX_SWIPE)*0.8);
+    shoot(aimX, Math.min(aimY, CFG.GOAL_H+0.1), power);
+  }
+}
+
+/* ── Trajectory dots ── */
+function showTrajectory(dx, dy) {
+  if(!ballMesh) return;
+  const power=Math.min(Math.hypot(dx,dy)/CFG.MAX_SWIPE,1);
+  if(power<0.05){ clearTrajectory(); return; }
+  const aimX=Math.max(-CFG.GOAL_W/2, Math.min(CFG.GOAL_W/2,(dx/CFG.MAX_SWIPE)*(CFG.GOAL_W*0.6)));
+  const aimY=CFG.GOAL_H*(0.2+Math.max(0,-dy/CFG.MAX_SWIPE)*0.8);
+  const sx=ballMesh.position.x, sy=ballMesh.position.y, sz=ballMesh.position.z;
+  trajDots.forEach((dot,i) => {
+    const t=(i+1)/(CFG.TRAJ_DOTS+1);
+    dot.position.set(
+      sx+(aimX-sx)*t,
+      sy+(aimY-sy)*t+Math.sin(t*Math.PI)*(0.4+power*0.7),
+      sz+(CFG.GOAL_Z-sz)*t
     );
-    ball.rotation.x += 0.14; ball.rotation.z += 0.07;
-    if (t < 1) requestAnimationFrame(fly);
-    else resolveShot(tx, ty);
+    dot.material.opacity=0.85-t*0.5;
+    dot.visible=true;
+  });
+}
+function clearTrajectory(){ trajDots.forEach(d=>d.visible=false); }
+
+/* ── Power ring (2D canvas) ── */
+function drawPowerRing(pct) {
+  if(!powerCtx||!ballMesh) return;
+  const w=El.powerCanvas.width, h=El.powerCanvas.height;
+  powerCtx.clearRect(0,0,w,h);
+  const bp=ballMesh.position.clone().project(camera);
+  const cx=(bp.x*0.5+0.5)*w, cy=(-bp.y*0.5+0.5)*h, r=52;
+  powerCtx.beginPath(); powerCtx.arc(cx,cy,r,0,Math.PI*2);
+  powerCtx.strokeStyle='rgba(255,255,255,0.18)'; powerCtx.lineWidth=6; powerCtx.stroke();
+  const hue=120-pct*120;
+  powerCtx.beginPath(); powerCtx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+pct*Math.PI*2);
+  powerCtx.strokeStyle=`hsl(${hue},90%,55%)`; powerCtx.lineWidth=6;
+  powerCtx.lineCap='round'; powerCtx.stroke();
+}
+function clearPowerRing(){ if(powerCtx) powerCtx.clearRect(0,0,El.powerCanvas.width,El.powerCanvas.height); }
+
+/* ════════════════════════════════════════
+   SHOOT & COLLISION
+════════════════════════════════════════ */
+function shoot(aimX, aimY, power) {
+  if(!S.active||S.shooting||S.timeRemaining<=0) return;
+  S.shooting=true;
+  const sx=ballMesh.position.x, sy=ballMesh.position.y, sz=ballMesh.position.z;
+  const dur=CFG.SHOOT_MS*(0.55+power*0.45);
+  const t0=performance.now();
+  (function fly(now){
+    const t=Math.min((now-t0)/dur,1);
+    const e=t<0.5?2*t*t:-1+(4-2*t)*t;
+    ballMesh.position.set(sx+(aimX-sx)*e, sy+(aimY-sy)*e+Math.sin(t*Math.PI)*0.5, sz+(CFG.GOAL_Z-sz)*e);
+    ballMesh.rotation.x+=0.15; ballMesh.rotation.z+=0.07;
+    if(t<1) requestAnimationFrame(fly);
+    else resolveShot(aimX,aimY);
   })(t0);
 }
 
-/* ════════════════════════════════════════
-   COLLISION
-════════════════════════════════════════ */
 function resolveShot(bx, by) {
-  const kx = keeper.position.x;
-  const saved = Math.abs(bx-kx) < 0.88 && Math.abs(by - CFG.GOAL_H/2) < CFG.GOAL_H/2+0.2;
-  const goal  = !saved && Math.abs(bx) < CFG.GOAL_W/2 && by>0.05 && by<CFG.GOAL_H+0.1;
-
-  if (saved) {
-    S.saves++;
-    El.scoreCandy.textContent = S.saves;
-    showFeedback('😅','SAVED!','saved');
-  } else if (goal) {
-    S.goals++;
-    S.points += CFG.POINTS_PER_GOAL;
-    El.scoreYou.textContent = S.points;
-    El.scoreYou.classList.remove('pop');
-    void El.scoreYou.offsetWidth;
-    El.scoreYou.classList.add('pop');
+  const kx=keeperMesh ? keeperMesh.position.x : 0;
+  const saved=Math.abs(bx-kx)<0.9 && by>0.1 && by<CFG.GOAL_H+0.2;
+  const goal=!saved && Math.abs(bx)<CFG.GOAL_W/2 && by>0.1 && by<CFG.GOAL_H+0.1;
+  if(saved){ S.saves++; El.scoreCandy.textContent=S.saves; showFeedback('😅','SAVED!','saved'); }
+  else if(goal){
+    S.goals++; S.points+=CFG.POINTS_PER_GOAL;
+    El.scoreYou.textContent=S.points;
+    El.scoreYou.classList.remove('pop'); void El.scoreYou.offsetWidth; El.scoreYou.classList.add('pop');
     showFeedback('⚽','GOAL!','goal');
-  } else {
-    showFeedback('😬','MISS!','miss');
-  }
-
-  setTimeout(() => {
-    ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    ball.rotation.set(0,0,0);
-    S.aimX = 0; updateAimIndicator();
-    S.shooting = false;
-  }, 1000);
+  } else { showFeedback('😬','MISS!','miss'); }
+  setTimeout(()=>{
+    ballMesh.position.set(0,CFG.BALL_Y,CFG.BALL_Z); ballMesh.rotation.set(0,0,0);
+    S.shooting=false;
+  },1000);
 }
 
-/* ════════════════════════════════════════
-   FEEDBACK
-════════════════════════════════════════ */
-function showFeedback(emoji, text, cls) {
-  El.feedback.className = 'feedback ' + cls;
-  El.fbEmoji.textContent = emoji;
-  El.fbText.textContent  = text;
+/* ── Feedback ── */
+function showFeedback(emoji,text,cls) {
+  El.feedback.className='feedback '+cls;
+  El.fbEmoji.textContent=emoji; El.fbText.textContent=text;
   El.feedback.classList.remove('screen-hidden');
   clearTimeout(El.feedback._t);
-  El.feedback._t = setTimeout(() => El.feedback.classList.add('screen-hidden'), 1200);
-}
-
-/* ════════════════════════════════════════
-   HUD & TIMER
-════════════════════════════════════════ */
-let gameTimerInterval = null;
-
-function updateTimerDisplay() {
-  El.hudTimer.textContent = S.timeRemaining + 's';
-  if (S.timeRemaining <= 10) El.hudTimer.style.color = '#FF5252';
-  else El.hudTimer.style.color = '#fff';
+  El.feedback._t=setTimeout(()=>El.feedback.classList.add('screen-hidden'),1300);
 }
 
 /* ════════════════════════════════════════
    GAME FLOW
 ════════════════════════════════════════ */
-function startGame() {
-  Object.assign(S, { goals:0, saves:0, points:0, timeRemaining:CFG.TIME_LIMIT, shooting:false, active:true, aimX:0 });
-  El.scoreYou.textContent = 0; El.scoreCandy.textContent = 0;
-  ball.position.set(0, CFG.BALL_Y, CFG.BALL_Z); ball.rotation.set(0,0,0);
-  keeperTimer = 0; keeper.position.x = 0; keeperTarget = 0;
-  updateAimIndicator(); updateTimerDisplay();
+function updateTimerDisplay() {
+  El.hudTimer.textContent=S.timeRemaining+'s';
+  El.hudTimer.style.color=S.timeRemaining<=10?'#FF5252':'#fff';
+}
 
+function startGame() {
+  Object.assign(S,{goals:0,saves:0,points:0,timeRemaining:CFG.TIME_LIMIT,shooting:false,active:true});
+  El.scoreYou.textContent=0; El.scoreCandy.textContent=0;
+  if(ballMesh) { ballMesh.position.set(0,CFG.BALL_Y,CFG.BALL_Z); ballMesh.rotation.set(0,0,0); }
+  if(keeperMesh) keeperMesh.position.x=0;
+  keeperPhase=0; updateTimerDisplay();
   El.start.classList.add('screen-hidden');
   El.gameover.classList.add('screen-hidden');
   El.hud.classList.remove('screen-hidden');
-  El.aim.classList.remove('screen-hidden');
-
+  El.swipeHint.classList.remove('screen-hidden');
   clearInterval(gameTimerInterval);
-  gameTimerInterval = setInterval(() => {
-    if (!S.active) return clearInterval(gameTimerInterval);
+  gameTimerInterval=setInterval(()=>{
+    if(!S.active) return clearInterval(gameTimerInterval);
     S.timeRemaining--;
     updateTimerDisplay();
-    if (S.timeRemaining <= 0) {
-      clearInterval(gameTimerInterval);
-      if (!S.shooting) endGame();
-      else setTimeout(endGame, 1200); // Wait for the last shot to resolve
-    }
-  }, 1000);
+    if(S.timeRemaining<=0){ clearInterval(gameTimerInterval); S.shooting?setTimeout(endGame,1200):endGame(); }
+  },1000);
 }
 
 function endGame() {
-  S.active = false;
+  S.active=false;
   El.hud.classList.add('screen-hidden');
-  El.aim.classList.add('screen-hidden');
+  El.swipeHint.classList.add('screen-hidden');
   El.gameover.classList.remove('screen-hidden');
-
-  El.goGoals.textContent = S.points;
-  El.goTotal.textContent = S.goals;
-
-  if      (S.goals>=10) { El.goTitle.textContent='PERFECT!';    El.goRating.textContent='🏆 WORLD CLASS STRIKER'; }
-  else if (S.goals>=6)  { El.goTitle.textContent='GREAT JOB!';  El.goRating.textContent='⭐ PRO LEVEL'; }
-  else if (S.goals>=3)  { El.goTitle.textContent='NOT BAD!';    El.goRating.textContent='👟 KEEP KICKING'; }
-  else                  { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
-
-  // Save to Firebase
-  saveScore(S.points); 
+  El.goGoals.textContent=S.points; El.goTotal.textContent=S.goals;
+  if(S.goals>=10){ El.goTitle.textContent='PERFECT!'; El.goRating.textContent='🏆 WORLD CLASS STRIKER'; }
+  else if(S.goals>=6){ El.goTitle.textContent='GREAT JOB!'; El.goRating.textContent='⭐ PRO LEVEL'; }
+  else if(S.goals>=3){ El.goTitle.textContent='NOT BAD!'; El.goRating.textContent='👟 KEEP KICKING'; }
+  else { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
+  saveScore(S.points);
 }
 
-/* ════════════════════════════════════════
-   RENDER LOOP
-════════════════════════════════════════ */
+/* ── Render loop ── */
 function renderLoop() {
   requestAnimationFrame(renderLoop);
-  ball.rotation.y += 0.008;
-  tickKeeper();
-  renderer.render(scene, camera);
+  const dt=clock.getDelta();
+  if(ballMesh && !S.shooting) ballMesh.rotation.y+=0.006;
+  tickKeeper(dt);
+  renderer.render(scene,camera);
 }
 
 /* ════════════════════════════════════════
-   BOOT — waits for THREE, loads textures in parallel, then builds scene
+   ERROR DISPLAY
 ════════════════════════════════════════ */
 function showBootError(msg) {
-  El.splashHint.textContent = '⚠️ ' + msg;
-  El.splashHint.style.cssText = 'color:#FF5252;font-size:13px;padding:0 16px;line-height:1.4';
-  El.splashBar.style.background = '#E31E24';
-  // Add a reload button
-  const btn = document.createElement('button');
-  btn.textContent = '🔄 Tap to Reload';
-  btn.style.cssText = 'margin-top:16px;padding:10px 24px;background:#F7C948;border:none;border-radius:24px;font-size:16px;font-weight:bold;cursor:pointer';
-  btn.onclick = () => location.reload();
+  El.splashHint.textContent='⚠️ '+msg;
+  El.splashHint.style.cssText='color:#FF5252;font-size:13px;padding:0 16px;line-height:1.5';
+  El.splashBar.style.background='#E31E24';
+  const btn=document.createElement('button');
+  btn.textContent='🔄 Tap to Reload';
+  btn.style.cssText='margin-top:16px;padding:10px 24px;background:#F7C948;border:none;border-radius:24px;font-size:16px;font-weight:bold;cursor:pointer';
+  btn.onclick=()=>location.reload();
   El.splashHint.after(btn);
 }
 
+/* ════════════════════════════════════════
+   BOOT — load FBX assets then build scene
+════════════════════════════════════════ */
 async function boot() {
   try {
-    // Step 1: Confirm THREE is available (blocking script, should be instant)
-    El.splashBar.style.width = '10%';
-    El.splashHint.textContent = 'Loading engine…';
-    await waitForThree();
-
-    texLoader = new THREE.TextureLoader();
-
-    // Step 2: Load all textures in parallel
-    El.splashBar.style.width = '30%';
-    El.splashHint.textContent = 'Loading assets…';
-
-    let loaded = 0;
-    const total = 2;
-    const onProgress = () => {
-      loaded++;
-      El.splashBar.style.width = (30 + Math.round((loaded / total) * 40)) + '%';
-    };
-
-    const [keeperTex, stadiumTex] = await Promise.all([
-      loadTexture('assets/keeper.png').then(t  => { onProgress(); return t; }),
-      loadTexture('assets/stadium.png').then(t => { onProgress(); return t; }),
-    ]);
-
-    // Step 3: Build 3D scene
-    El.splashBar.style.width = '75%';
-    El.splashHint.textContent = 'Building AR scene…';
+    El.splashBar.style.width='5%';
+    El.splashHint.textContent='Starting engine…';
     await preInitScene();
 
-    buildKeeper(keeperTex);
-    addStadiumSprites(stadiumTex);
+    El.splashBar.style.width='15%';
+    El.splashHint.textContent='Loading ball…';
+    const bolaFBX = await loadFBX('assets/bola.fbx', p=>{
+      El.splashBar.style.width=(15+p*10)+'%';
+    });
+    normalizeFBX(bolaFBX, 0.44);
+    bolaFBX.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    bolaFBX.castShadow=true;
+    bolaFBX.traverse(c=>{ if(c.isMesh) c.castShadow=true; });
+    scene.add(bolaFBX);
+    ballMesh=bolaFBX;
 
-    El.splashBar.style.width = '100%';
-    El.splashHint.textContent = 'Ready!';
-    await new Promise(r => setTimeout(r, 300));
+    El.splashBar.style.width='28%';
+    El.splashHint.textContent='Loading goal…';
+    const gawangFBX = await loadFBX('assets/gawang.fbx', p=>{
+      El.splashBar.style.width=(28+p*17)+'%';
+    });
+    normalizeFBX(gawangFBX, CFG.GOAL_W);
+    gawangFBX.position.set(0, 0, CFG.GOAL_Z);
+    gawangFBX.traverse(c=>{ if(c.isMesh){ c.castShadow=true; c.receiveShadow=true; } });
+    scene.add(gawangFBX);
+    gawangMesh=gawangFBX;
+
+    El.splashBar.style.width='46%';
+    El.splashHint.textContent='Loading Reddie… (9 MB)';
+    const reddieFBX = await loadFBX('assets/Reddie.fbx', p=>{
+      El.splashBar.style.width=(46+p*44)+'%';
+    });
+    normalizeFBX(reddieFBX, 1.8);
+    reddieFBX.position.set(0, 0, CFG.GOAL_Z+0.6);
+    reddieFBX.traverse(c=>{ if(c.isMesh) c.castShadow=true; });
+    // Play first animation clip if available
+    if(reddieFBX.animations && reddieFBX.animations.length>0){
+      mixer=new THREE.AnimationMixer(reddieFBX);
+      mixer.clipAction(reddieFBX.animations[0]).play();
+    }
+    scene.add(reddieFBX);
+    keeperMesh=reddieFBX;
+
+    El.splashBar.style.width='95%';
+    El.splashHint.textContent='Loading stadium…';
+    const texLoader=new THREE.TextureLoader();
+    const stadiumTex=await new Promise(r=>texLoader.load('assets/stadium.png',r,undefined,()=>r(null)));
+    addStadiumSprite(stadiumTex);
+
+    El.splashBar.style.width='100%';
+    El.splashHint.textContent='Ready!';
+    await new Promise(r=>setTimeout(r,300));
 
     El.splash.classList.add('screen-hidden');
     El.regScreen.classList.remove('screen-hidden');
 
-  } catch (err) {
-    console.error('[Yupi AR] Boot failed:', err);
-    showBootError(err.message || 'Failed to load. Please reload.');
+  } catch(err) {
+    console.error('[Yupi AR] Boot error:', err);
+    showBootError(err.message || 'Load failed. Please reload.');
   }
 }
 
-/* ── Registration Logic ── */
+/* ════════════════════════════════════════
+   REGISTRATION
+════════════════════════════════════════ */
 El.btnReg.onclick = async () => {
-  const name = El.regName.value.trim();
-  if (!name) {
-    alert('Please enter a nickname.');
-    return;
-  }
-  El.btnReg.textContent = 'LAUNCHING AR...';
-  El.btnReg.disabled = true;
-
-  // Fire and forget Firebase registration
-  registerPlayer(name).catch(e => console.warn('Firebase register failed:', e));
-
-  // Phase 2: get camera AFTER user gesture (fast, just camera stream)
+  const name=El.regName.value.trim();
+  if(!name){ alert('Please enter a nickname.'); return; }
+  El.btnReg.textContent='LAUNCHING AR…'; El.btnReg.disabled=true;
+  registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
   await initCamera();
-
-  startGame();
+  initSwipeControls();
+  El.start.classList.remove('screen-hidden');
 };
 
-/* ── Leaderboard Logic ── */
+/* ── Leaderboard ── */
 $('btn-leaderboard').onclick = async () => {
   El.lbScreen.classList.remove('screen-hidden');
-  El.lbList.innerHTML = '<div class="lb-loading">Loading scores...</div>';
-  
-  const scores = await fetchLeaderboard();
-  
-  if (scores.length === 0) {
-    El.lbList.innerHTML = '<div class="lb-loading">No scores yet or Firebase not configured.</div>';
-    return;
-  }
-  
-  El.lbList.innerHTML = '';
-  let myRankHTML = '<span class="lb-col-rank">-</span><span class="lb-col-player">-</span><span class="lb-col-score">-</span>';
-  
-  scores.forEach((entry, index) => {
-    const rank = index + 1;
-    const isMe = entry.id === PlayerState.docId;
-    
-    const row = document.createElement('div');
-    row.className = 'lb-row';
-    row.innerHTML = `
-      <span class="lb-col-rank">${rank}</span>
-      <span class="lb-col-player">${entry.name || 'Anonymous'}</span>
-      <span class="lb-col-score">${entry.points || 0}</span>
-    `;
-    if (isMe) row.style.backgroundColor = 'rgba(247,201,72,0.15)';
+  El.lbList.innerHTML='<div class="lb-loading">Loading scores...</div>';
+  const scores=await fetchLeaderboard();
+  if(!scores.length){ El.lbList.innerHTML='<div class="lb-loading">No scores yet.</div>'; return; }
+  El.lbList.innerHTML='';
+  let myHTML='<span class="lb-col-rank">-</span><span class="lb-col-player">-</span><span class="lb-col-score">-</span>';
+  scores.forEach((entry,i)=>{
+    const row=document.createElement('div'); row.className='lb-row';
+    row.innerHTML=`<span class="lb-col-rank">${i+1}</span><span class="lb-col-player">${entry.name||'Anon'}</span><span class="lb-col-score">${entry.points||0}</span>`;
+    if(entry.id===PlayerState.docId){ row.style.background='rgba(247,201,72,0.15)'; myHTML=row.innerHTML; }
     El.lbList.appendChild(row);
-    
-    if (isMe) myRankHTML = row.innerHTML;
   });
-  
-  El.lbMyRow.innerHTML = myRankHTML;
+  El.lbMyRow.innerHTML=myHTML;
 };
-El.btnCloseLb.onclick = () => El.lbScreen.classList.add('screen-hidden');
+El.btnCloseLb.onclick=()=>El.lbScreen.classList.add('screen-hidden');
 
 /* ── Controls ── */
-$('btn-start').onclick    = startGame;
-$('btn-restart').onclick  = startGame;
-$('btn-left').onclick     = aimLeft;
-$('btn-right').onclick    = aimRight;
-$('btn-shoot').onclick    = shoot;
+$('btn-start').onclick=startGame;
+$('btn-restart').onclick=startGame;
 
-/* Touch hold for continuous aim */
-let aimHold = null;
-['btn-left','btn-right'].forEach(id => {
-  const el=$(id), fn = id==='btn-left' ? aimLeft : aimRight;
-  el.addEventListener('touchstart', () => { aimHold=setInterval(fn,120); }, {passive:true});
-  el.addEventListener('touchend',   () => clearInterval(aimHold), {passive:true});
-});
-
-window.addEventListener('DOMContentLoaded', () => boot().catch(err => {
-  console.error('[Yupi AR] Unhandled boot error:', err);
-  showBootError(err.message || 'Unexpected error. Please reload.');
+/* ── Boot ── */
+window.addEventListener('DOMContentLoaded', ()=>boot().catch(err=>{
+  console.error('[Yupi AR] Fatal:', err);
+  showBootError(err.message||'Unexpected error.');
 }));
-

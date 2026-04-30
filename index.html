@@ -4,18 +4,20 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
   <title>Yupi AR Goalie – Penalty Shootout</title>
-  <meta name="description" content="Yupi AR Penalty Shootout. Scan. Play. Win! GUMMY FUN, GOAL WON!"/>
+  <meta name="description" content="Yupi AR Penalty Shootout. Swipe to shoot. GUMMY FUN, GOAL WON!"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet"/>
 
-  <!-- Preload game images so they are in cache when Three.js requests them -->
-  <link rel="preload" href="assets/stadium.png" as="image"/>
-  <link rel="preload" href="assets/keeper.png"  as="image"/>
-  <link rel="preload" href="assets/ball.png"    as="image"/>
-  <link rel="preload" href="assets/logo.png"    as="image"/>
+  <!-- Importmap: three served locally, addons via CDN (FBXLoader + its deps) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./assets/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
 
-  <!-- Three.js — served locally, blocking so it's guaranteed ready before game.js -->
-  <script src="assets/three.min.js"></script>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -44,7 +46,6 @@
     <div class="start-subtitle">WORLD CUP AR</div>
     <p class="reg-desc">ENTER NICKNAME</p>
     <input type="text" id="reg-name" class="reg-input" placeholder="Your Nickname" />
-    
     <button id="btn-submit-reg" class="yupi-btn yupi-btn-yellow" style="margin-top: 12px;">
       <span>START GAME</span>
     </button>
@@ -60,7 +61,7 @@
     </div>
     <div class="start-subtitle">WORLD CUP AR</div>
     <img src="assets/ball.png" class="start-ball-img" alt="Yupi Soccer Ball"/>
-    <p class="start-desc">Point your camera at the <strong>floor</strong><br/>and kick for glory!</p>
+    <p class="start-desc">Point camera at the <strong>floor</strong><br/>then <strong>swipe up</strong> to shoot!</p>
     <button id="btn-start" class="yupi-btn yupi-btn-green">
       <span>⚽ TAP TO PLAY</span>
     </button>
@@ -70,46 +71,31 @@
 
 <!-- ===== SCORE HUD ===== -->
 <div id="hud" class="screen-hidden">
-
-  <!-- Top score bar -->
   <div class="hud-scorebar">
     <div class="hud-team hud-team-left">
       <span class="hud-team-name">POINTS</span>
       <span class="hud-team-score" id="score-you">0</span>
     </div>
-    <div class="hud-center-label">VS</div>
+    <div class="hud-center-label" id="hud-timer">60s</div>
     <div class="hud-team hud-team-right">
       <span class="hud-team-score" id="score-candy">0</span>
       <span class="hud-team-name">SAVES</span>
     </div>
   </div>
-
-  <!-- Mode label -->
-  <div class="hud-goalie-label" id="hud-timer">60s</div>
-
-  <!-- Removed Shots remaining block entirely since we use timer -->
-  <div class="hud-shots-row screen-hidden">
-    <div class="hud-shots-label">SHOTS LEFT</div>
-    <div class="hud-shots-pips" id="shots-pips"></div>
-  </div>
-
-  <!-- Bottom controls -->
-  <div class="hud-controls">
-    <button id="btn-left"  class="ctrl-btn ctrl-arrow" aria-label="Aim Left">◀</button>
-    <button id="btn-shoot" class="ctrl-btn ctrl-shoot" aria-label="Shoot">
-      <div class="shoot-icon">👟</div>
-      <div class="shoot-label">SHOOT</div>
-    </button>
-    <button id="btn-right" class="ctrl-btn ctrl-arrow" aria-label="Aim Right">▶</button>
-  </div>
-
-  <!-- Bottom Yupi branding -->
   <div class="hud-footer">
     <img src="assets/logo.png" class="yupi-logo-img hud-footer-logo" alt="Yupi"/>
     <span class="hud-footer-tag">GUMMY FUN, GOAL WON!</span>
   </div>
-
 </div>
+
+<!-- ===== SWIPE HINT ===== -->
+<div id="swipe-hint" class="screen-hidden">
+  <div class="swipe-arrow">⬆</div>
+  <div class="swipe-label">SWIPE TO SHOOT</div>
+</div>
+
+<!-- ===== POWER CANVAS OVERLAY ===== -->
+<canvas id="power-canvas"></canvas>
 
 <!-- ===== FEEDBACK OVERLAY ===== -->
 <div id="feedback" class="feedback screen-hidden">
@@ -149,12 +135,6 @@
 <!-- ===== AR CANVAS ===== -->
 <div id="ar-container"></div>
 
-<!-- ===== AIM INDICATOR ===== -->
-<div id="aim-indicator" class="screen-hidden">
-  <div class="aim-dot"></div>
-  <div class="aim-ring"></div>
-</div>
-
 <!-- ===== LEADERBOARD SCREEN ===== -->
 <div id="leaderboard-screen" class="screen-hidden">
   <div class="lb-bg"></div>
@@ -183,7 +163,7 @@
   </div>
 </div>
 
-<!-- Game entry point — module deferred automatically by browser -->
+<!-- Game entry point -->
 <script type="module" src="game.js"></script>
 </body>
 </html>

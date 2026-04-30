@@ -211,61 +211,42 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--dark);font-fam
 }
 .shot-pip.used{background:rgba(255,255,255,0.2);box-shadow:none}
 
-/* Controls */
-.hud-controls{
-  position:absolute;bottom:64px;left:0;right:0;
-  display:flex;justify-content:center;align-items:center;gap:20px;
-  pointer-events:all;padding:0 20px;
+/* Power canvas overlay */
+#power-canvas{
+  position:fixed;inset:0;z-index:90;
+  pointer-events:none;
+  width:100%;height:100%;
 }
-.ctrl-btn{
-  font-family:var(--font);border:none;cursor:pointer;
-  transition:transform 0.12s,filter 0.12s;border-radius:50%;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  -webkit-tap-highlight-color:transparent;
+
+/* Swipe hint */
+#swipe-hint{
+  position:fixed;bottom:48px;left:50%;transform:translateX(-50%);
+  z-index:110;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center;gap:4px;
 }
-.ctrl-btn:active{transform:scale(0.88);filter:brightness(0.85)}
-.ctrl-arrow{
-  width:64px;height:64px;font-size:1.6rem;color:#fff;
-  background:rgba(0,0,0,0.55);border:2px solid rgba(255,255,255,0.3);
-  box-shadow:0 4px 16px rgba(0,0,0,0.4);
+.swipe-arrow{
+  font-size:2.4rem;color:var(--yellow);
+  animation:swipeBounce 0.9s ease-in-out infinite alternate;
+  filter:drop-shadow(0 0 12px rgba(247,201,72,0.7));
 }
-.ctrl-shoot{
-  width:84px;height:84px;
-  background:linear-gradient(135deg,#ff8f00,var(--red));
-  box-shadow:0 0 0 4px rgba(247,201,72,0.4),0 8px 30px rgba(227,30,36,0.6);
-  border:3px solid var(--yellow);
+@keyframes swipeBounce{
+  from{transform:translateY(0) scale(1)}
+  to  {transform:translateY(-12px) scale(1.1)}
 }
-.shoot-icon{font-size:2rem;line-height:1}
-.shoot-label{font-size:0.65rem;letter-spacing:2px;color:#fff;font-family:var(--font);margin-top:2px}
+.swipe-label{
+  font-family:var(--font);font-size:0.75rem;letter-spacing:3px;
+  color:rgba(255,255,255,0.6);
+}
 
 /* Footer */
 .hud-footer{
   position:absolute;bottom:10px;left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:4px;font-size:1.4rem;
+  display:flex;align-items:center;gap:4px;
   pointer-events:none;white-space:nowrap;
 }
 .hud-footer-tag{
   font-family:var(--font);font-size:0.7rem;color:rgba(255,255,255,0.5);
   letter-spacing:1px;margin-left:8px;align-self:flex-end;margin-bottom:2px;
-}
-
-/* Aim indicator */
-#aim-indicator{
-  position:fixed;bottom:200px;left:50%;transform:translateX(-50%);
-  width:60px;height:60px;pointer-events:none;z-index:90;
-}
-.aim-dot{
-  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:10px;height:10px;background:rgba(255,220,0,0.9);border-radius:50%;
-  box-shadow:0 0 8px var(--yellow);
-}
-.aim-ring{
-  position:absolute;inset:0;border:2px solid rgba(255,220,0,0.6);
-  border-radius:50%;animation:ringPulse 1.2s ease-in-out infinite;
-}
-@keyframes ringPulse{
-  0%,100%{transform:scale(1);opacity:0.8}
-  50%{transform:scale(1.4);opacity:0.3}
 }
 
 /* ══════════════════════════════════════════
