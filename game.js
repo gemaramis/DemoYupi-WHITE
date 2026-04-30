@@ -257,7 +257,9 @@ async function initScene() {
   scene.add(new THREE.AmbientLight(0xffffff,0.85));
   const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
   sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
-  scene.add(Object.assign(new THREE.PointLight(0x4488ff,0.5,20),{position:{x:-3,y:5,z:-3}}));
+  const fill = new THREE.PointLight(0x4488ff,0.5,20);
+  fill.position.set(-3,5,-3);
+  scene.add(fill);
 
   gameGroup.visible=true; gamePlaced=true; scene.add(gameGroup);
   buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
