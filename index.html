@@ -10,7 +10,8 @@
 
   <!-- 8th Wall XR Engine (free open source, SLAM world tracking) -->
   <script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1/dist/xr.js"
-          data-preload-chunks="slam" crossorigin="anonymous"></script>
+          data-preload-chunks="slam" crossorigin="anonymous" async
+          onerror="console.warn('[XR8] Engine CDN failed to load — will use camera fallback')"></script>
 
   <!-- Importmap: three local, addons via CDN (GLTFLoader) -->
   <script type="importmap">

@@ -139,14 +139,26 @@ function fixFBXMaterials(group) {
 /** Called on "TAP TO PLAY" — starts 8th Wall engine on the ar-canvas. */
 function startXR8Session() {
   El.start.classList.add('screen-hidden');
-  XR8.addCameraPipelineModules([
-    XR8.GlTextureRenderer.pipelineModule(), // draws live camera feed
-    XR8.Threejs.pipelineModule(),           // syncs Three.js camera to device motion
-    XR8.XrController.pipelineModule(),      // SLAM world tracking + hit-test
-    buildGamePipelineModule(),
-  ]);
-  XR8.xrController().configure({ disableWorldTracking: false });
-  XR8.run({ canvas: $('ar-canvas') });
+  const run = () => {
+    try {
+      console.log('[XR8] Starting pipeline…');
+      XR8.addCameraPipelineModules([
+        XR8.GlTextureRenderer.pipelineModule(),
+        XR8.Threejs.pipelineModule(),
+        XR8.XrController.pipelineModule(),
+        buildGamePipelineModule(),
+      ]);
+      XR8.xrController().configure({ disableWorldTracking: false });
+      XR8.run({ canvas: $('ar-canvas') });
+      console.log('[XR8] XR8.run() called successfully');
+    } catch(e) {
+      console.error('[XR8] Pipeline failed, falling back:', e);
+      startFallbackSession();
+    }
+  };
+  // Wait for XR8 to be fully ready (fires xrloaded even if script is sync)
+  if (window.XR8) { run(); }
+  else { window.addEventListener('xrloaded', run, {once:true}); }
 }
 
 function buildGamePipelineModule() {
@@ -696,11 +708,16 @@ async function boot() {
 El.btnReg.onclick = async () => {
   const name=El.regName.value.trim();
   if(!name){ alert('Please enter a nickname.'); return; }
-  El.btnReg.textContent='LAUNCHING…'; El.btnReg.disabled=true;
+  El.btnReg.textContent='STARTING…'; El.btnReg.disabled=true;
   registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
-  El.start.classList.remove('screen-hidden');
-  // Camera + AR starts when user taps TAP TO PLAY
+  console.log('[Boot] XR8 available:', !!window.XR8);
+  if (window.XR8) {
+    startXR8Session();
+  } else {
+    // Show start screen — user must tap TAP TO PLAY to trigger camera permission
+    El.start.classList.remove('screen-hidden');
+  }
 };
 
 /* ── Leaderboard ── */
