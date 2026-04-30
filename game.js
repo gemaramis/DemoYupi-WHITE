@@ -93,7 +93,9 @@ async function preInitScene() {
   sun.position.set(3, 10, 3); sun.castShadow = true;
   sun.shadow.mapSize.set(512, 512); // was 1024 — halved for performance
   scene.add(sun);
-  scene.add(Object.assign(new THREE.PointLight(0x4488ff, 0.6, 20), { position: new THREE.Vector3(-3, 4, -3) }));
+  const fillLight = new THREE.PointLight(0x4488ff, 0.6, 20);
+  fillLight.position.set(-3, 4, -3);
+  scene.add(fillLight);
 
   buildGround(); buildGoal(); buildBall();
   addYupiBanner();
