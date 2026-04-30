@@ -287,6 +287,7 @@ async function initScene() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
+  renderer.autoClear = false; // <-- CRITICAL: Don't clear the XR8 camera feed
 
   camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
 
@@ -360,7 +361,10 @@ function startXRSession() {
       tickKeeper(dt); tickConfetti(); if (mixer) mixer.update(dt);
     },
 
-    onRender: () => renderer.render(scene, camera),
+    onRender: () => {
+      renderer.clearDepth();
+      renderer.render(scene, camera);
+    },
   };
 
   XR8.addCameraPipelineModules([
