@@ -881,22 +881,105 @@ function showBootError(msg) {
 }
 
 /* ════════════════════════════════════════
-   BOOT — load GLB assets then build scene
+   BOOT — load assets then build scene
 ════════════════════════════════════════ */
+
+/** Fetch a binary file with real-time progress reporting. */
+async function fetchWithProgress(url, onProgress) {
+  const resp = await fetch(url);
+  const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+  if (!total || !resp.body) {
+    // No content-length — fall back to direct blob
+    const blob = await resp.blob();
+    onProgress(1);
+    return URL.createObjectURL(blob);
+  }
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(received / total);
+  }
+  const blob = new Blob(chunks);
+  return URL.createObjectURL(blob);
+}
+
+/** Load GLB with real progress even for large files. */
+async function loadGLTFWithProgress(url, label, barStart, barEnd) {
+  const mb = n => (n / 1048576).toFixed(1);
+  const pct = p => Math.round((barStart + (barEnd - barStart) * p));
+
+  // First fetch with progress, then parse
+  let blobUrl = url;
+  try {
+    const resp = await fetch(url, {method:'HEAD'});
+    const size = parseInt(resp.headers.get('Content-Length') || '0', 10);
+    const sizeLabel = size ? ` (${mb(size)} MB)` : '';
+    El.splashHint.textContent = `${label}${sizeLabel}…`;
+    El.splashBar.style.width = pct(0) + '%';
+
+    blobUrl = await fetchWithProgress(url, p => {
+      const loadedMB = size ? ` ${mb(p * size)}/${mb(size)} MB` : '';
+      El.splashHint.textContent = `${label}${loadedMB}…`;
+      El.splashBar.style.width = pct(p) + '%';
+    });
+  } catch(e) {
+    // If fetch fails, fall back to GLTFLoader progress
+    El.splashHint.textContent = `${label}…`;
+  }
+
+  const model = await loadGLTF(blobUrl, p => {
+    El.splashBar.style.width = pct(0.9 + p * 0.1) + '%';
+  });
+  // Clean up blob URL
+  if (blobUrl !== url) URL.revokeObjectURL(blobUrl);
+  El.splashBar.style.width = pct(1) + '%';
+  return model;
+}
+
 async function boot() {
   try {
-    El.splashBar.style.width='5%';
-    El.splashHint.textContent='Initializing…';
-    clock = new THREE.Clock(); // gameGroup already created at module level
+    El.splashBar.style.width='2%';
+    El.splashHint.textContent='⏳ Initializing…';
+    clock = new THREE.Clock();
 
-    // Ball: always use a visible procedural sphere (bola.glb materials are unreliable)
+    // ── Step 1: Wait for XR8 engine (loaded async) ─────────────────────
+    El.splashHint.textContent='📡 Loading AR engine…';
+    El.splashBar.style.width='5%';
+    if (!window.XR8) {
+      await new Promise(resolve => {
+        let elapsed = 0;
+        const poll = setInterval(() => {
+          elapsed += 200;
+          // Animate the bar while waiting
+          const fake = 5 + Math.min(elapsed / 80, 12);
+          El.splashBar.style.width = fake + '%';
+          if (window.XR8) { clearInterval(poll); resolve(); }
+          // If taking >15s, show warning
+          if (elapsed > 15000) {
+            El.splashHint.textContent = '⚠️ Slow network — still loading AR engine…';
+          }
+        }, 200);
+        window.addEventListener('xrloaded', () => { clearInterval(poll); resolve(); }, {once:true});
+      });
+    }
+    El.splashBar.style.width='18%';
+    El.splashHint.textContent='✅ AR engine ready';
+    await new Promise(r=>setTimeout(r,200));
+
+    // ── Step 2: Build procedural ball ──────────────────────────────────
+    El.splashHint.textContent='⚽ Building ball…';
+    El.splashBar.style.width='20%';
     const ballGroup = new THREE.Group();
     const ballSphere = new THREE.Mesh(
       new THREE.SphereGeometry(CFG.BALL_RADIUS, 32, 32),
       new THREE.MeshStandardMaterial({color:0xE31E24, roughness:0.35, metalness:0.05})
     );
     ballSphere.castShadow = true;
-    // Black pentagon patches for soccer look
     const patchMat = new THREE.MeshStandardMaterial({color:0x111111, roughness:0.5});
     [0,60,120,180,240,300].forEach(deg => {
       const patch = new THREE.Mesh(new THREE.SphereGeometry(CFG.BALL_RADIUS*0.28, 8, 8), patchMat);
@@ -909,37 +992,27 @@ async function boot() {
     ballGroup.castShadow = true;
     gameGroup.add(ballGroup);
     ballMesh = ballGroup;
-    El.splashBar.style.width = '25%';
+    El.splashBar.style.width='25%';
 
-    El.splashBar.style.width='28%';
-    El.splashHint.textContent='Loading goal…';
-    const gawangGLB = await loadGLTF('assets/gawang.glb', p=>{
-      El.splashBar.style.width=(28+p*17)+'%';
-    });
+    // ── Step 3: Load goalpost ──────────────────────────────────────────
+    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', '🥅 Loading goalpost', 25, 40);
     normalizeFBXByHeight(gawangGLB, CFG.GOAL_H);
     gawangGLB.position.set(0, 0, CFG.GOAL_Z);
     fixFBXMaterials(gawangGLB);
     gameGroup.add(gawangGLB);
-    gawangMesh=gawangGLB;
+    gawangMesh = gawangGLB;
 
-    El.splashBar.style.width='46%';
-    El.splashHint.textContent='Loading Goalkeeper…';
-    const keeperGLB = await loadGLTF('assets/Goalkeeper.glb', p=>{
-      El.splashBar.style.width=(46+p*44)+'%';
-    });
-    // Check if Goalkeeper.glb includes full scene (goal+keeper) based on bounding box
+    // ── Step 4: Load Goalkeeper ────────────────────────────────────────
+    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', '🧄 Loading Goalkeeper', 40, 90);
     const keeperBox = new THREE.Box3().setFromObject(keeperGLB);
     const keeperSize = new THREE.Vector3();
     keeperBox.getSize(keeperSize);
     const isFullScene = Math.max(keeperSize.x, keeperSize.z) > 1.5;
-
     if (isFullScene) {
-      // Full scene GLB — normalize to goal width and hide gawang
       normalizeFBX(keeperGLB, CFG.GOAL_W * 1.2);
       keeperGLB.position.set(0, 0, CFG.GOAL_Z);
-      gawangGLB.visible = false; // Goalkeeper.glb has the goal frame built-in
+      gawangGLB.visible = false;
     } else {
-      // Keeper-only GLB — scale to ~90% of goal height
       normalizeFBXByHeight(keeperGLB, CFG.GOAL_H * 0.9);
       keeperGLB.position.set(0, 0, CFG.GOAL_Z + 0.08);
     }
@@ -951,13 +1024,10 @@ async function boot() {
     gameGroup.add(keeperGLB);
     keeperMesh = keeperGLB;
 
-    El.splashBar.style.width='95%';
-    El.splashHint.textContent='Almost ready…';
-
+    // ── Done ───────────────────────────────────────────────────────────
     El.splashBar.style.width='100%';
-    El.splashHint.textContent='Ready!';
-    await new Promise(r=>setTimeout(r,300));
-
+    El.splashHint.textContent='✨ Ready!';
+    await new Promise(r=>setTimeout(r,400));
     El.splash.classList.add('screen-hidden');
     El.regScreen.classList.remove('screen-hidden');
 

@@ -189,8 +189,8 @@
   </div>
 </div>
 
-<!-- 8th Wall XR engine (open-source, no App Key) – must load before game.js -->
-<script crossorigin="anonymous"
+<!-- 8th Wall XR engine (open-source, no App Key) - loads async so splash doesn't block -->
+<script async crossorigin="anonymous"
         src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1/dist/xr.js"
         data-preload-chunks="slam">
 </script>
