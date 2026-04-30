@@ -5,6 +5,7 @@
 "use strict";
 
 import * as THREE from 'three';
+window.THREE = THREE; // Provide global THREE for XR8
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './firebase-db.js';
 
@@ -302,7 +303,7 @@ async function initFallbackScene() {
 }
 
 /** Called when the Start Screen "TAP TO PLAY" button is tapped. */
-function startXRSession() {
+async function startXRSession() {
   El.start.classList.add('screen-hidden');
 
   if (typeof XR8 === 'undefined') {
