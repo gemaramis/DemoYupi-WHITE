@@ -239,37 +239,54 @@ function onXR8Place(e) {
   } catch(ex) { console.error('XR8 place:', ex); }
 }
 
+/** Set up Three.js scene + camera stream — call from user gesture (registration). */
+async function initScene() {
+  if (renderer) return; // already initialized
+  renderer = new THREE.WebGLRenderer({antialias:false, alpha:true, powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.shadowMap.enabled=true;
+  // Fullscreen canvas behind all UI
+  renderer.domElement.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;';
+  document.body.prepend(renderer.domElement);
+
+  camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,100);
+  camera.position.set(0,0.9,1.8); camera.lookAt(0,0.3,CFG.GOAL_Z);
+
+  scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff,0.85));
+  const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
+  sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
+  scene.add(Object.assign(new THREE.PointLight(0x4488ff,0.5,20),{position:{x:-3,y:5,z:-3}}));
+
+  gameGroup.visible=true; gamePlaced=true; scene.add(gameGroup);
+  buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
+
+  // Request camera permission NOW (inside user gesture context)
+  await initCamera();
+  initSwipeControls();
+
+  window.addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+    if(El.powerCanvas){El.powerCanvas.width=innerWidth;El.powerCanvas.height=innerHeight;}
+  });
+  // Render loop
+  (function loop(){
+    requestAnimationFrame(loop);
+    const dt=clock.getDelta();
+    if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008;
+    tickKeeper(dt); tickConfetti(); if(mixer) mixer.update(dt);
+    renderer.render(scene,camera);
+  })();
+}
+
 /** Fallback for browsers without XR8 (manual camera stream, fixed camera). */
 async function startFallbackSession() {
   El.start.classList.add('screen-hidden');
-  try {
-    renderer = new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'});
-    renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
-    renderer.setSize(innerWidth,innerHeight);
-    renderer.shadowMap.enabled=true;
-    $('ar-container').appendChild(renderer.domElement);
-    camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,100);
-    camera.position.set(0,0.9,1.8); camera.lookAt(0,0.3,CFG.GOAL_Z);
-    scene = new THREE.Scene(); scene.background=new THREE.Color(0x0a1020);
-    scene.add(new THREE.AmbientLight(0xffffff,0.85));
-    const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
-    sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
-    gameGroup.visible=true; gamePlaced=true; scene.add(gameGroup);
-    buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
-    await initCamera(); initSwipeControls();
-    window.addEventListener('resize',()=>{
-      camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth,innerHeight);
-      if(El.powerCanvas){El.powerCanvas.width=innerWidth;El.powerCanvas.height=innerHeight;}
-    });
-    (function loop(){
-      requestAnimationFrame(loop); const dt=clock.getDelta();
-      if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008;
-      tickKeeper(dt); tickConfetti(); renderer.render(scene,camera);
-    })();
-    El.hud.classList.remove('screen-hidden'); El.swipeHint.classList.remove('screen-hidden');
-    startGame();
-  } catch(err) { showBootError('Fallback failed: '+err.message); }
+  El.hud.classList.remove('screen-hidden');
+  El.swipeHint.classList.remove('screen-hidden');
+  startGame();
 }
 
 
@@ -715,13 +732,9 @@ El.btnReg.onclick = async () => {
   El.btnReg.textContent='STARTING…'; El.btnReg.disabled=true;
   registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
-  console.log('[Boot] XR8 available:', !!window.XR8);
-  if (window.XR8) {
-    startXR8Session();
-  } else {
-    // Show start screen — user must tap TAP TO PLAY to trigger camera permission
-    El.start.classList.remove('screen-hidden');
-  }
+  // initScene must run here (inside user gesture) to get camera permission on mobile
+  await initScene();
+  El.start.classList.remove('screen-hidden');
 };
 
 /* ── Leaderboard ── */
@@ -743,7 +756,7 @@ $('btn-leaderboard').onclick = async () => {
 El.btnCloseLb.onclick=()=>El.lbScreen.classList.add('screen-hidden');
 
 /* ── Controls ── */
-$('btn-start').onclick = () => window.XR8 ? startXR8Session() : startFallbackSession();
+$('btn-start').onclick = startFallbackSession;
 $('btn-restart').onclick = () => { gamePlaced=true; startGame(); };
 
 /* ── Boot ── */

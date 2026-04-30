@@ -8,11 +8,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Fredoka+One&display=swap" rel="stylesheet"/>
 
-  <!-- 8th Wall XR Engine (free open source, SLAM world tracking) -->
-  <script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1/dist/xr.js"
-          data-preload-chunks="slam" crossorigin="anonymous" async
-          onerror="console.warn('[XR8] Engine CDN failed to load — will use camera fallback')"></script>
-
   <!-- Importmap: three local, addons via CDN (GLTFLoader) -->
   <script type="importmap">
   {
@@ -143,10 +138,7 @@
 </div>
 
 <!-- ===== AR CANVAS ===== -->
-<div id="ar-container">
-  <!-- XR8 takes over ar-canvas for camera + AR rendering -->
-  <canvas id="ar-canvas" style="position:fixed;inset:0;width:100%;height:100%;z-index:0;"></canvas>
-</div>
+<div id="ar-container"></div>
 
 <!-- ===== LEADERBOARD SCREEN ===== -->
 <div id="leaderboard-screen" class="screen-hidden">
