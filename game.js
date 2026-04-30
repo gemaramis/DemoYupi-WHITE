@@ -38,6 +38,28 @@ const El = {
 let renderer, scene, camera, clock;
 let ballMesh=null, keeperMesh=null, gawangMesh=null, mixer=null;
 let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=null;
+let confettiParticles=[];
+
+/* ── Audio Engine (synthesized, no files) ── */
+let audioCtx=null;
+function getAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+function playTone({freq=220,freq2=freq,type='sine',dur=0.3,vol=0.4,delay=0}={}){  try{
+  const ac=getAudio(), g=ac.createGain(), o=ac.createOscillator();
+  o.type=type; o.frequency.setValueAtTime(freq,ac.currentTime+delay);
+  o.frequency.exponentialRampToValueAtTime(freq2,ac.currentTime+delay+dur);
+  g.gain.setValueAtTime(vol,ac.currentTime+delay);
+  g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+delay+dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(ac.currentTime+delay); o.stop(ac.currentTime+delay+dur);
+  }catch(e){}
+}
+const Snd={
+  kick:()=>{ playTone({freq:180,freq2:60,type:'sine',dur:0.18,vol:0.6}); playTone({freq:2400,freq2:800,type:'square',dur:0.05,vol:0.08}); },
+  goal:()=>{ [0,0.12,0.24].forEach((d,i)=>playTone({freq:440*(i+1)*0.8,freq2:880*(i+1)*0.8,type:'sine',dur:0.35,vol:0.35,delay:d})); },
+  save:()=>{ playTone({freq:300,freq2:180,type:'sawtooth',dur:0.25,vol:0.3}); },
+  miss:()=>{ playTone({freq:220,freq2:100,type:'triangle',dur:0.4,vol:0.25}); },
+  tick:()=>{ playTone({freq:880,type:'square',dur:0.05,vol:0.15}); },
+};
 
 /* ════════════════════════════════════════
    FBX HELPERS
@@ -129,6 +151,7 @@ async function preInitScene() {
   buildGround();
   buildTrajectoryDots();
   addYupiBanner();
+  buildConfettiPool();
 
   window.addEventListener('resize', () => {
     camera.aspect = innerWidth/innerHeight;
@@ -181,10 +204,43 @@ function addYupiBanner() {
   b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); scene.add(b);
 }
 
-function addStadiumSprite(tex) {
-  if(!tex) return;
-  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,opacity:0.55}));
-  s.scale.set(28,9,1); s.position.set(0,5.5,-18); scene.add(s);
+/* ── Confetti particles ── */
+function buildConfettiPool() {
+  const colors=[0xe31b23,0xffc703,0x008540,0x0055b3,0xffffff];
+  for(let i=0;i<30;i++){
+    const m=new THREE.Mesh(
+      new THREE.PlaneGeometry(0.12,0.07),
+      new THREE.MeshBasicMaterial({color:colors[i%colors.length],side:THREE.DoubleSide,transparent:true})
+    );
+    m.visible=false; m.userData={vx:0,vy:0,vz:0,life:0};
+    scene.add(m); confettiParticles.push(m);
+  }
+}
+
+function burstConfetti(x,y,z) {
+  confettiParticles.forEach(p=>{
+    p.position.set(x+(Math.random()-0.5)*0.5, y+(Math.random()-0.5)*0.3, z);
+    p.rotation.set(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI);
+    p.userData.vx=(Math.random()-0.5)*0.08;
+    p.userData.vy=0.04+Math.random()*0.08;
+    p.userData.vz=(Math.random()-0.5)*0.04;
+    p.userData.life=1.0;
+    p.material.opacity=1; p.visible=true;
+  });
+}
+
+function tickConfetti() {
+  confettiParticles.forEach(p=>{
+    if(!p.visible) return;
+    p.userData.life-=0.025;
+    if(p.userData.life<=0){ p.visible=false; return; }
+    p.position.x+=p.userData.vx;
+    p.position.y+=p.userData.vy;
+    p.position.z+=p.userData.vz;
+    p.userData.vy-=0.003; // gravity
+    p.rotation.x+=0.08; p.rotation.z+=0.05;
+    p.material.opacity=p.userData.life;
+  });
 }
 
 /* ════════════════════════════════════════
@@ -254,6 +310,7 @@ function onTE(e) {
   const mag=Math.hypot(dx,dy);
   touch0=null; clearTrajectory(); clearPowerRing();
   if(mag>15) {
+    Snd.kick();
     const power=Math.min(mag/CFG.MAX_SWIPE,1);
     const aimX=Math.max(-CFG.GOAL_W/2, Math.min(CFG.GOAL_W/2, (dx/CFG.MAX_SWIPE)*(CFG.GOAL_W*0.6)));
     const aimY=CFG.GOAL_H*(0.2+Math.max(0,-dy/CFG.MAX_SWIPE)*0.8);
@@ -321,13 +378,23 @@ function resolveShot(bx, by) {
   const kx=keeperMesh ? keeperMesh.position.x : 0;
   const saved=Math.abs(bx-kx)<0.9 && by>0.1 && by<CFG.GOAL_H+0.2;
   const goal=!saved && Math.abs(bx)<CFG.GOAL_W/2 && by>0.1 && by<CFG.GOAL_H+0.1;
-  if(saved){ S.saves++; El.scoreCandy.textContent=S.saves; showFeedback('😅','SAVED!','saved'); }
-  else if(goal){
+  if(saved){
+    S.saves++; El.scoreCandy.textContent=S.saves;
+    Snd.save();
+    // Keeper dive tilt
+    if(keeperMesh) { keeperMesh.rotation.z = bx > kx ? -0.7 : 0.7; setTimeout(()=>{ if(keeperMesh) keeperMesh.rotation.z=0; },600); }
+    showFeedback('😅','SAVED!','saved');
+  } else if(goal){
     S.goals++; S.points+=CFG.POINTS_PER_GOAL;
     El.scoreYou.textContent=S.points;
     El.scoreYou.classList.remove('pop'); void El.scoreYou.offsetWidth; El.scoreYou.classList.add('pop');
+    Snd.goal();
+    burstConfetti(bx, by, CFG.GOAL_Z+0.2);
     showFeedback('⚽','GOAL!','goal');
-  } else { showFeedback('😬','MISS!','miss'); }
+  } else {
+    Snd.miss();
+    showFeedback('😬','MISS!','miss');
+  }
   setTimeout(()=>{
     ballMesh.position.set(0,CFG.BALL_Y,CFG.BALL_Z); ballMesh.rotation.set(0,0,0);
     S.shooting=false;
@@ -381,14 +448,66 @@ function endGame() {
   else if(S.goals>=3){ El.goTitle.textContent='NOT BAD!'; El.goRating.textContent='👟 KEEP KICKING'; }
   else { El.goTitle.textContent='KEEP TRYING'; El.goRating.textContent='💪 TRAIN HARDER'; }
   saveScore(S.points);
+  generateShareCard();
+}
+
+/* ── Score Share Card ── */
+function generateShareCard() {
+  const cvs=document.createElement('canvas');
+  cvs.width=1080; cvs.height=1080;
+  const ctx=cvs.getContext('2d');
+  // Background gradient
+  const bg=ctx.createLinearGradient(0,0,0,1080);
+  bg.addColorStop(0,'#b90014'); bg.addColorStop(1,'#7a0009');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,1080,1080);
+  // Yellow arc top
+  ctx.fillStyle='#ffc703';
+  ctx.beginPath(); ctx.arc(540,-120,580,0,Math.PI); ctx.fill();
+  // Title
+  ctx.fillStyle='#ffffff'; ctx.textAlign='center';
+  ctx.font='bold 64px Plus Jakarta Sans,Arial'; ctx.fillText('YUPI AR SHOOTOUT',540,200);
+  // Score circle
+  ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(540,520,220,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#b90014'; ctx.font='bold 140px Plus Jakarta Sans,Arial'; ctx.fillText(S.points,540,560);
+  ctx.font='bold 36px Plus Jakarta Sans,Arial'; ctx.fillStyle='#7a0009'; ctx.fillText('POINTS',540,620);
+  // Goals row
+  ctx.fillStyle='rgba(255,255,255,0.15)';
+  ctx.beginPath(); ctx.roundRect(140,780,360,120,24); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(580,780,360,120,24); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 60px Plus Jakarta Sans,Arial';
+  ctx.fillText(S.goals,320,860); ctx.fillText(S.saves,760,860);
+  ctx.font='bold 24px Plus Jakarta Sans,Arial'; ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText('GOALS',320,900); ctx.fillText('SAVES',760,900);
+  // Tagline
+  ctx.fillStyle='#ffc703'; ctx.font='bold 34px Plus Jakarta Sans,Arial';
+  ctx.fillText('GUMMY FUN, GOAL WON! 🍬⚽',540,1020);
+
+  // Show share button
+  const shareBtn=$('btn-share-score');
+  if(shareBtn) {
+    shareBtn.classList.remove('screen-hidden');
+    shareBtn.onclick=async()=>{
+      cvs.toBlob(async blob=>{
+        const file=new File([blob],'yupi-score.png',{type:'image/png'});
+        if(navigator.canShare&&navigator.canShare({files:[file]})){
+          await navigator.share({title:'Yupi AR Shootout',text:`I scored ${S.points} pts in Yupi AR! 🍬⚽ GUMMY FUN, GOAL WON!`,files:[file]});
+        } else {
+          // Fallback: download
+          const a=document.createElement('a'); a.href=cvs.toDataURL();
+          a.download='yupi-score.png'; a.click();
+        }
+      });
+    };
+  }
 }
 
 /* ── Render loop ── */
 function renderLoop() {
   requestAnimationFrame(renderLoop);
   const dt=clock.getDelta();
-  if(ballMesh && !S.shooting) ballMesh.rotation.y+=0.006;
+  if(ballMesh && !S.shooting) ballMesh.rotation.y+=0.008;
   tickKeeper(dt);
+  tickConfetti();
   renderer.render(scene,camera);
 }
 
