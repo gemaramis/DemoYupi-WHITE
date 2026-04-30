@@ -5,15 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no"/>
   <title>Yupi AR Goalie – Penalty Shootout</title>
   <meta name="description" content="Yupi AR Penalty Shootout. Swipe to shoot. GUMMY FUN, GOAL WON!"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Fredoka+One&display=swap" rel="stylesheet"/>
 
-  <!-- Importmap: three served locally, addons via CDN (FBXLoader + its deps) -->
+  <!-- Importmap: three local, addons + fflate via CDN -->
   <script type="importmap">
   {
     "imports": {
       "three": "./assets/three.module.min.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+      "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"
     }
   }
   </script>

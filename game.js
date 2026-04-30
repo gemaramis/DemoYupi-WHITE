@@ -10,9 +10,9 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 
 /* ── CONFIG ── */
 const CFG = {
-  TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
-  GOAL_W: 3.6, GOAL_H: 2.4, GOAL_Z: -5.5,
-  BALL_Y: 0.25, BALL_Z: 1.2,
+  TIME_LIMIT: 15, POINTS_PER_GOAL: 100,
+  GOAL_W: 4.0, GOAL_H: 2.8, GOAL_Z: -5.5,
+  BALL_Y: 0.22, BALL_Z: 1.2,
   KEEPER_PATROL: 1.6, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
 };
@@ -60,6 +60,35 @@ function normalizeFBX(group, targetSize) {
   box.getCenter(center);
   const h = new THREE.Vector3(); box.getSize(h);
   group.position.y -= (center.y - h.y / 2);
+}
+
+/** Scale FBX so its HEIGHT = targetH (useful for goals/characters). */
+function normalizeFBXByHeight(group, targetH) {
+  const box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const sc = targetH / size.y;
+  group.scale.setScalar(sc);
+  box.setFromObject(group);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const h = new THREE.Vector3(); box.getSize(h);
+  group.position.y -= (center.y - h.y / 2);
+}
+
+/** Fix common FBX material issues (backface, transparency). */
+function fixFBXMaterials(group) {
+  group.traverse(c => {
+    if (!c.isMesh) return;
+    c.castShadow = true;
+    c.receiveShadow = true;
+    const mats = Array.isArray(c.material) ? c.material : [c.material];
+    mats.forEach(m => {
+      m.side = THREE.DoubleSide;
+      m.depthWrite = true;
+      m.needsUpdate = true;
+    });
+  });
 }
 
 /* ════════════════════════════════════════
@@ -141,7 +170,7 @@ function addYupiBanner() {
   ctx.beginPath(); ctx.roundRect(0,0,1024,256,40); ctx.fill();
   ctx.font='bold 190px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ['#E31E24','#0055B3','#F7C948','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],200+i*220,128); });
-  const b=new THREE.Mesh(new THREE.PlaneGeometry(3.8,0.95),
+  const b=new THREE.Mesh(new THREE.PlaneGeometry(4.0,0.95),
     new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
   b.position.set(0,CFG.GOAL_H+0.7,CFG.GOAL_Z); scene.add(b);
 }
@@ -387,8 +416,7 @@ async function boot() {
     });
     normalizeFBX(bolaFBX, 0.44);
     bolaFBX.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    bolaFBX.castShadow=true;
-    bolaFBX.traverse(c=>{ if(c.isMesh) c.castShadow=true; });
+    fixFBXMaterials(bolaFBX);
     scene.add(bolaFBX);
     ballMesh=bolaFBX;
 
@@ -397,9 +425,10 @@ async function boot() {
     const gawangFBX = await loadFBX('assets/gawang.fbx', p=>{
       El.splashBar.style.width=(28+p*17)+'%';
     });
-    normalizeFBX(gawangFBX, CFG.GOAL_W);
+    // Normalize by HEIGHT so goal is always taller than keeper
+    normalizeFBXByHeight(gawangFBX, CFG.GOAL_H);
     gawangFBX.position.set(0, 0, CFG.GOAL_Z);
-    gawangFBX.traverse(c=>{ if(c.isMesh){ c.castShadow=true; c.receiveShadow=true; } });
+    fixFBXMaterials(gawangFBX);
     scene.add(gawangFBX);
     gawangMesh=gawangFBX;
 
@@ -408,10 +437,10 @@ async function boot() {
     const reddieFBX = await loadFBX('assets/Reddie.fbx', p=>{
       El.splashBar.style.width=(46+p*44)+'%';
     });
-    normalizeFBX(reddieFBX, 1.8);
-    reddieFBX.position.set(0, 0, CFG.GOAL_Z+0.6);
-    reddieFBX.traverse(c=>{ if(c.isMesh) c.castShadow=true; });
-    // Play first animation clip if available
+    // Reddie slightly shorter than goal post
+    normalizeFBXByHeight(reddieFBX, CFG.GOAL_H * 0.7);
+    reddieFBX.position.set(0, 0, CFG.GOAL_Z+0.55);
+    fixFBXMaterials(reddieFBX);
     if(reddieFBX.animations && reddieFBX.animations.length>0){
       mixer=new THREE.AnimationMixer(reddieFBX);
       mixer.clipAction(reddieFBX.animations[0]).play();
@@ -420,10 +449,7 @@ async function boot() {
     keeperMesh=reddieFBX;
 
     El.splashBar.style.width='95%';
-    El.splashHint.textContent='Loading stadium…';
-    const texLoader=new THREE.TextureLoader();
-    const stadiumTex=await new Promise(r=>texLoader.load('assets/stadium.png',r,undefined,()=>r(null)));
-    addStadiumSprite(stadiumTex);
+    El.splashHint.textContent='Almost ready…';
 
     El.splashBar.style.width='100%';
     El.splashHint.textContent='Ready!';
