@@ -6,7 +6,6 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './firebase-db.js';
 
 /* ── CONFIG ── */
@@ -40,12 +39,8 @@ let renderer, scene, camera, clock;
 let ballMesh=null, keeperMesh=null, gawangMesh=null, mixer=null;
 let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=null;
 let confettiParticles=[];
-
-/* ── WebXR AR state ── */
-let gameGroup = null;       // all placeable scene objects live here
-let reticleMesh = null;     // gold ring shown on detected surface
-let xrHitTestSource = null, xrHitTestRequested = false;
-let isARMode = false, gamePlaced = false;
+let gameGroup = new THREE.Group(); // pre-created; added to scene in onStart
+let reticleMesh=null, gamePlaced=false;
 
 /* ── Audio Engine (synthesized, no files) ── */
 let audioCtx=null;
@@ -138,102 +133,134 @@ function fixFBXMaterials(group) {
 }
 
 /* ════════════════════════════════════════
-   SCENE INIT
+   8TH WALL AR PIPELINE  (free, no API key)
 ════════════════════════════════════════ */
-async function preInitScene() {
+
+/** Called on "TAP TO PLAY" — starts 8th Wall engine on the ar-canvas. */
+function startXR8Session() {
+  El.start.classList.add('screen-hidden');
+  XR8.addCameraPipelineModules([
+    XR8.GlTextureRenderer.pipelineModule(), // draws live camera feed
+    XR8.Threejs.pipelineModule(),           // syncs Three.js camera to device motion
+    XR8.XrController.pipelineModule(),      // SLAM world tracking + hit-test
+    buildGamePipelineModule(),
+  ]);
+  XR8.xrController().configure({ disableWorldTracking: false });
+  XR8.run({ canvas: $('ar-canvas') });
+}
+
+function buildGamePipelineModule() {
+  return {
+    name: 'yupi-ar-game',
+    onStart: ({ canvas }) => {
+      const { scene: xs, camera: xc, renderer: xr } = XR8.Threejs.xrScene();
+      scene = xs; camera = xc; renderer = xr;
+
+      // Lighting
+      scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+      sun.position.set(3,12,4); sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
+      const fill = new THREE.PointLight(0x4488ff,0.5,25); fill.position.set(-3,5,-3); scene.add(fill);
+      const rim  = new THREE.PointLight(0xffaa33,0.4,20); rim.position.set(3,4,4);   scene.add(rim);
+
+      // Game group hidden until floor placed
+      gameGroup.visible = false; scene.add(gameGroup);
+      buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
+
+      // Gold reticle
+      const rg = new THREE.RingGeometry(0.12,0.18,32).rotateX(-Math.PI/2);
+      reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color:0xFFD700,side:THREE.DoubleSide}));
+      reticleMesh.matrixAutoUpdate = false; reticleMesh.visible = false; scene.add(reticleMesh);
+
+      // Swipe shoot controls + placement tap
+      initSwipeControls(canvas);
+      canvas.addEventListener('touchstart', onXR8Place, {passive:false});
+      canvas.addEventListener('click', ()=>onXR8Place({touches:[{clientX:innerWidth/2,clientY:innerHeight/2}]}));
+
+      // "Point at floor" hint
+      const hint = Object.assign(document.createElement('div'),
+        {id:'xr8-hint', textContent:'🎯 Point at the floor — tap gold ring to place goal'});
+      hint.style.cssText='position:fixed;bottom:110px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);color:#FFD700;font:700 15px Plus Jakarta Sans,sans-serif;padding:10px 22px;border-radius:28px;z-index:200;pointer-events:none;white-space:nowrap';
+      document.body.appendChild(hint);
+    },
+
+    onUpdate: () => {
+      const dt = clock.getDelta();
+      if (S.active) { tickKeeper(dt); tickConfetti(); if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008; }
+      // Live reticle via center-screen hit-test
+      if (!gamePlaced) {
+        try {
+          const hits = XR8.XrController.hitTest(0.5,0.5,['FEATURE_POINT','ESTIMATED_SURFACE']);
+          if (hits.length > 0) {
+            reticleMesh.visible = true;
+            const {position:p, rotation:r} = hits[0];
+            reticleMesh.matrix.compose(
+              new THREE.Vector3(p.x,p.y,p.z),
+              new THREE.Quaternion(r.x,r.y,r.z,r.w),
+              new THREE.Vector3(1,1,1)
+            );
+          } else { reticleMesh.visible = false; }
+        } catch(_) {}
+      }
+    },
+  };
+}
+
+/** Tap handler — anchors gameGroup to detected floor surface. */
+function onXR8Place(e) {
+  if (gamePlaced) return;
+  e.preventDefault && e.preventDefault();
+  const x=(e.touches?.[0]?.clientX??innerWidth/2)/innerWidth;
+  const y=(e.touches?.[0]?.clientY??innerHeight/2)/innerHeight;
   try {
-    renderer = new THREE.WebGLRenderer({ antialias:false, alpha:true, powerPreference:'high-performance' });
-  } catch(e) { throw new Error('WebGL unavailable: ' + e.message); }
+    const hits = XR8.XrController.hitTest(x,y,['FEATURE_POINT','ESTIMATED_SURFACE']);
+    if (hits.length > 0) {
+      const {position:p, rotation:r} = hits[0];
+      gameGroup.position.set(p.x,p.y,p.z);
+      gameGroup.quaternion.set(r.x,r.y,r.z,r.w);
+      gameGroup.visible=true; gamePlaced=true; reticleMesh.visible=false;
+      document.getElementById('xr8-hint')?.remove();
+      El.hud.classList.remove('screen-hidden');
+      El.swipeHint.classList.remove('screen-hidden');
+      startGame();
+    }
+  } catch(ex) { console.error('XR8 place:', ex); }
+}
 
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.shadowMap.enabled = true;
-  $('ar-container').appendChild(renderer.domElement);
-
-  clock = new THREE.Clock();
-  scene = new THREE.Scene();
-  gameGroup = new THREE.Group();
-  scene.add(gameGroup);
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.3);
-  sun.position.set(3, 12, 4); sun.castShadow=true;
-  sun.shadow.mapSize.set(512,512); scene.add(sun);
-  const fill = new THREE.PointLight(0x4488ff, 0.5, 25);
-  fill.position.set(-3,5,-3); scene.add(fill);
-  const rim = new THREE.PointLight(0xffaa33, 0.4, 20);
-  rim.position.set(3,4,4); scene.add(rim);
-
-  buildGround();
-  buildTrajectoryDots();
-  addYupiBanner();
-  buildConfettiPool();
-
-  // Detect WebXR AR support (Android Chrome + other browsers)
-  const xrSupported = navigator.xr
-    ? await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false)
-    : false;
-
-  if (xrSupported) {
-    // —— AR MODE: device camera + real plane detection ——
-    isARMode = true;
-    renderer.xr.enabled = true;
-    scene.background = null; // transparent → shows real camera
-    gameGroup.visible = false; // hidden until placed on floor
-
-    // Gold reticle ring shown on detected surface
-    const rg = new THREE.RingGeometry(0.12, 0.18, 32).rotateX(-Math.PI/2);
-    reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide}));
-    reticleMesh.matrixAutoUpdate = false;
-    reticleMesh.visible = false;
-    scene.add(reticleMesh);
-
-    // AR entry button (appended to body by Three.js helper)
-    const arBtn = ARButton.createButton(renderer, {
-      requiredFeatures: ['hit-test'],
-      optionalFeatures: ['dom-overlay'],
-      domOverlay: { root: document.body },
+/** Fallback for browsers without XR8 (manual camera stream, fixed camera). */
+async function startFallbackSession() {
+  El.start.classList.add('screen-hidden');
+  try {
+    renderer = new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'});
+    renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+    renderer.setSize(innerWidth,innerHeight);
+    renderer.shadowMap.enabled=true;
+    $('ar-container').appendChild(renderer.domElement);
+    camera = new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,150);
+    camera.position.set(0,1.65,3.8); camera.lookAt(0,0.8,CFG.GOAL_Z);
+    scene = new THREE.Scene(); scene.background=new THREE.Color(0x0a1020);
+    scene.add(new THREE.AmbientLight(0xffffff,0.85));
+    const sun=new THREE.DirectionalLight(0xffffff,1.3); sun.position.set(3,12,4);
+    sun.castShadow=true; sun.shadow.mapSize.set(512,512); scene.add(sun);
+    gameGroup.visible=true; gamePlaced=true; scene.add(gameGroup);
+    buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
+    await initCamera(); initSwipeControls();
+    window.addEventListener('resize',()=>{
+      camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
+      if(El.powerCanvas){El.powerCanvas.width=innerWidth;El.powerCanvas.height=innerHeight;}
     });
-    arBtn.id = 'ar-enter-btn'; arBtn.textContent = '📷 Enter AR';
-    document.body.appendChild(arBtn);
-
-    // Fixed camera for non-AR preview
-    camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
-
-    // Tap-to-place listener
-    renderer.domElement.addEventListener('click', xrPlaceGame);
-
-  } else {
-    // —— FALLBACK MODE: manual camera stream ——
-    isARMode = false;
-    scene.background = new THREE.Color(0x0a1020);
-    camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 150);
-    camera.position.set(0, 1.65, 3.8);
-    camera.lookAt(0, 0.8, CFG.GOAL_Z);
-    gameGroup.visible = true;
-    gamePlaced = true;
-  }
-
-  window.addEventListener('resize', () => {
-    camera.aspect = innerWidth/innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-    if(El.powerCanvas){ El.powerCanvas.width=innerWidth; El.powerCanvas.height=innerHeight; }
-  });
-  renderLoop();
+    (function loop(){
+      requestAnimationFrame(loop); const dt=clock.getDelta();
+      if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008;
+      tickKeeper(dt); tickConfetti(); renderer.render(scene,camera);
+    })();
+    El.hud.classList.remove('screen-hidden'); El.swipeHint.classList.remove('screen-hidden');
+    startGame();
+  } catch(err) { showBootError('Fallback failed: '+err.message); }
 }
 
-/* ── AR placement: called on tap when reticle is visible ── */
-function xrPlaceGame() {
-  if (!isARMode || gamePlaced || !reticleMesh || !reticleMesh.visible) return;
-  gameGroup.position.setFromMatrixPosition(reticleMesh.matrix);
-  gameGroup.visible = true;
-  gamePlaced = true;
-  reticleMesh.visible = false;
-  El.swipeHint.classList.remove('screen-hidden');
-  El.hud.classList.remove('screen-hidden');
-  startGame();
-}
+
 
 function buildGround() {
   const grass = new THREE.Mesh(
@@ -346,8 +373,9 @@ function tickKeeper(dt) {
 /* ════════════════════════════════════════
    SWIPE CONTROLS
 ════════════════════════════════════════ */
-function initSwipeControls() {
-  const cvs = renderer.domElement;
+function initSwipeControls(canvas) {
+  const cvs = canvas || renderer?.domElement;
+  if (!cvs) return;
   cvs.addEventListener('touchstart', onTS, {passive:false});
   cvs.addEventListener('touchmove',  onTM, {passive:false});
   cvs.addEventListener('touchend',   onTE, {passive:false});
@@ -574,48 +602,9 @@ function generateShareCard() {
   }
 }
 
-/* ── Render loop ── */
-function renderLoop() {
-  if (isARMode) {
-    // XR-aware loop: Three.js WebXR manager handles RAF
-    renderer.setAnimationLoop((timestamp, frame) => {
-      const dt = clock.getDelta();
-      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
-      tickKeeper(dt);
-      tickConfetti();
-      // Hit-test for floor reticle (only while waiting to place)
-      if (frame && !gamePlaced) {
-        const session = renderer.xr.getSession();
-        const refSpace = renderer.xr.getReferenceSpace();
-        if (!xrHitTestRequested) {
-          session.requestReferenceSpace('viewer').then(vs =>
-            session.requestHitTestSource({space: vs}).then(s => { xrHitTestSource = s; })
-          );
-          session.addEventListener('end', () => { xrHitTestSource=null; xrHitTestRequested=false; });
-          xrHitTestRequested = true;
-        }
-        if (xrHitTestSource) {
-          const hits = frame.getHitTestResults(xrHitTestSource);
-          if (hits.length > 0) {
-            reticleMesh.visible = true;
-            reticleMesh.matrix.fromArray(hits[0].getPose(refSpace).transform.matrix);
-          } else { reticleMesh.visible = false; }
-        }
-      }
-      renderer.render(scene, camera);
-    });
-  } else {
-    // Standard loop for non-AR fallback
-    (function loop() {
-      requestAnimationFrame(loop);
-      const dt = clock.getDelta();
-      if (ballMesh && !S.shooting) ballMesh.rotation.y += 0.008;
-      tickKeeper(dt);
-      tickConfetti();
-      renderer.render(scene, camera);
-    })();
-  }
-}
+/* renderLoop removed — XR8 onUpdate handles the render cycle.
+   Fallback loop is inlined in startFallbackSession(). */
+
 
 /* ════════════════════════════════════════
    ERROR DISPLAY
@@ -637,8 +626,8 @@ function showBootError(msg) {
 async function boot() {
   try {
     El.splashBar.style.width='5%';
-    El.splashHint.textContent='Starting engine…';
-    await preInitScene();
+    El.splashHint.textContent='Initializing…';
+    clock = new THREE.Clock(); // gameGroup already created at module level
 
     El.splashBar.style.width='15%';
     El.splashHint.textContent='Loading ball…';
@@ -707,12 +696,11 @@ async function boot() {
 El.btnReg.onclick = async () => {
   const name=El.regName.value.trim();
   if(!name){ alert('Please enter a nickname.'); return; }
-  El.btnReg.textContent='LAUNCHING AR…'; El.btnReg.disabled=true;
+  El.btnReg.textContent='LAUNCHING…'; El.btnReg.disabled=true;
   registerPlayer(name).catch(e=>console.warn('Firebase reg failed:',e));
   El.regScreen.classList.add('screen-hidden');
-  await initCamera();
-  initSwipeControls();
   El.start.classList.remove('screen-hidden');
+  // Camera + AR starts when user taps TAP TO PLAY
 };
 
 /* ── Leaderboard ── */
@@ -734,8 +722,8 @@ $('btn-leaderboard').onclick = async () => {
 El.btnCloseLb.onclick=()=>El.lbScreen.classList.add('screen-hidden');
 
 /* ── Controls ── */
-$('btn-start').onclick=startGame;
-$('btn-restart').onclick=startGame;
+$('btn-start').onclick = () => window.XR8 ? startXR8Session() : startFallbackSession();
+$('btn-restart').onclick = () => { gamePlaced=true; startGame(); };
 
 /* ── Boot ── */
 window.addEventListener('DOMContentLoaded', ()=>boot().catch(err=>{
