@@ -1,10 +1,10 @@
 /**
- * YUPI AR PENALTY SHOOTOUT v1 — game.js
+ * YUPI AR PENALTY SHOOTOUT v2 — game.js
  * Swipe-to-shoot | GLB assets | Three.js ES modules
  */
 "use strict";
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '2.0.0';
 const APP_ENV    = 'production';
 
 import * as THREE from 'three';
@@ -14,11 +14,15 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 
 /* ── CONFIG ── */
 const CFG = {
-  TIME_LIMIT: 15, POINTS_PER_GOAL: 100,
-  GOAL_W: 0.9, GOAL_H: 0.35, GOAL_Z: -1.2,
-  BALL_Y: 0.04, BALL_Z: 0.22,
-  KEEPER_PATROL: 0.3, KEEPER_CYCLE: 2.2,
+  TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
+  // Goal & gameplay sizing (tabletop AR — ~1:6 real-world scale)
+  GOAL_W: 1.6, GOAL_H: 0.55, GOAL_Z: -1.5,
+  BALL_Y: 0.06, BALL_Z: 0.30,
+  BALL_RADIUS: 0.16,
+  KEEPER_PATROL: 0.60, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
+  // Surface detection
+  SURFACE_CONFIDENCE_NEEDED: 25,  // frames before allowing placement
 };
 
 /* ── STATE ── */
@@ -45,6 +49,8 @@ let trajDots=[], powerCtx=null, touch0=null, keeperPhase=0, gameTimerInterval=nu
 let confettiParticles=[];
 let gameGroup = new THREE.Group(); // pre-created; added to scene in onStart
 let reticleMesh=null, gamePlaced=false;
+let surfaceConfidence=0; // frames with stable surface hit
+let placementReady=false; // true when confidence >= threshold
 
 /* ── Audio Engine (synthesized, no files) ── */
 let audioCtx=null;
@@ -183,12 +189,87 @@ function buildGamePipelineModule() {
       gameGroup.visible = false; scene.add(gameGroup);
       buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
 
-      // Gold reticle
-      const rg = new THREE.RingGeometry(0.12,0.18,32).rotateX(-Math.PI/2);
-      reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color:0xFFD700,side:THREE.DoubleSide}));
-      reticleMesh.matrixAutoUpdate = false; reticleMesh.visible = false; scene.add(reticleMesh);
+      // Gold reticle — enhanced with pulsing rings + goal ghost preview
+      const rg = new THREE.RingGeometry(0.20, 0.28, 48).rotateX(-Math.PI/2);
+      reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({
+        color: 0xFFD700, side: THREE.DoubleSide, transparent: true, opacity: 0.95
+      }));
+      reticleMesh.matrixAutoUpdate = false;
+      reticleMesh.visible = false;
 
-      // Swipe shoot controls + placement tap
+      // Inner cross/dot
+      const innerDot = new THREE.Mesh(
+        new THREE.CircleGeometry(0.04, 16).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFFFFF, side:THREE.DoubleSide, transparent:true, opacity:0.9})
+      );
+      innerDot.name = 'reticle-inner'; reticleMesh.add(innerDot);
+
+      // Outer pulse ring
+      const pulseRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.30, 0.34, 48).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide, transparent:true, opacity:0.3})
+      );
+      pulseRing.name = 'reticle-pulse'; reticleMesh.add(pulseRing);
+
+      // Ghost goal footprint (2 vertical posts + crossbar at reticle position)
+      const postMat = new THREE.MeshBasicMaterial({color:0xFFFFFF, transparent:true, opacity:0.25, side:THREE.DoubleSide});
+      const ghostGoal = new THREE.Group();
+      ghostGoal.name = 'reticle-ghost';
+      // Left post
+      const lp = new THREE.Mesh(new THREE.PlaneGeometry(0.03, CFG.GOAL_H), postMat.clone());
+      lp.position.set(-CFG.GOAL_W/2, CFG.GOAL_H/2, 0); ghostGoal.add(lp);
+      // Right post
+      const rp = lp.clone(); rp.position.set(CFG.GOAL_W/2, CFG.GOAL_H/2, 0); ghostGoal.add(rp);
+      // Crossbar
+      const cb = new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W, 0.03), postMat.clone());
+      cb.position.set(0, CFG.GOAL_H, 0); ghostGoal.add(cb);
+      // Arrow pointing inward (facing camera)
+      const arrowMesh = new THREE.Mesh(
+        new THREE.ConeGeometry(0.06, 0.15, 6).rotateX(Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFD700, transparent:true, opacity:0.7})
+      );
+      arrowMesh.position.set(0, 0.12, 0); ghostGoal.add(arrowMesh);
+      reticleMesh.add(ghostGoal);
+
+      // ── Floor directional arrow (tracks camera to show YOUR side) ──
+      const dirArrowGroup = new THREE.Group();
+      dirArrowGroup.name = 'reticle-dir-arrow';
+      dirArrowGroup.position.y = 0.005; // just above floor
+      const arrowMat = new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide, transparent:true, opacity:0.9});
+      // Arrow body rectangle
+      const arrowBody = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.06, 0.30).rotateX(-Math.PI/2),
+        arrowMat.clone()
+      );
+      arrowBody.position.set(0, 0, 0.22);
+      dirArrowGroup.add(arrowBody);
+      // Arrowhead (triangle pointing away from camera)
+      const triGeo = new THREE.BufferGeometry();
+      triGeo.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([0,0,0,  -0.12,0,0.22,  0.12,0,0.22]), 3));
+      triGeo.setIndex([0,2,1]); triGeo.computeVertexNormals();
+      const arrowHead = new THREE.Mesh(triGeo, arrowMat.clone());
+      dirArrowGroup.add(arrowHead);
+      // "YOU" canvas label
+      const youCvs = document.createElement('canvas');
+      youCvs.width = 128; youCvs.height = 40;
+      const youCtx = youCvs.getContext('2d');
+      youCtx.fillStyle = 'rgba(255,214,10,0.9)';
+      youCtx.beginPath(); youCtx.roundRect(0,0,128,40,8); youCtx.fill();
+      youCtx.fillStyle = '#1a1400';
+      youCtx.font = 'bold 24px Arial'; youCtx.textAlign='center'; youCtx.textBaseline='middle';
+      youCtx.fillText('YOU', 64, 20);
+      const youLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.16, 0.05).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(youCvs), side:THREE.DoubleSide, transparent:true})
+      );
+      youLabel.position.set(0, 0, 0.44);
+      dirArrowGroup.add(youLabel);
+      reticleMesh.add(dirArrowGroup);
+
+      // Higher quality rendering
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
       initSwipeControls(canvas);
       canvas.addEventListener('touchstart', onXR8Place, {passive:false});
       canvas.addEventListener('click', ()=>onXR8Place({touches:[{clientX:innerWidth/2,clientY:innerHeight/2}]}));
@@ -203,44 +284,118 @@ function buildGamePipelineModule() {
     onUpdate: () => {
       const dt = clock.getDelta();
       if (S.active) { tickKeeper(dt); tickConfetti(); if(ballMesh&&!S.shooting) ballMesh.rotation.y+=0.008; }
-      // Live reticle via center-screen hit-test
+
+      // Surface confidence + color-coded reticle
       if (!gamePlaced) {
         try {
-          const hits = XR8.XrController.hitTest(0.5,0.5,['FEATURE_POINT','ESTIMATED_SURFACE']);
+          const hits = XR8.XrController.hitTest(0.5, 0.5, ['FEATURE_POINT','ESTIMATED_SURFACE']);
           if (hits.length > 0) {
-            reticleMesh.visible = true;
+            surfaceConfidence = Math.min(surfaceConfidence + 1, CFG.SURFACE_CONFIDENCE_NEEDED + 10);
+            placementReady = surfaceConfidence >= CFG.SURFACE_CONFIDENCE_NEEDED;
+            const t = Math.min(surfaceConfidence / CFG.SURFACE_CONFIDENCE_NEEDED, 1);
+
             const {position:p, rotation:r} = hits[0];
+            reticleMesh.visible = true;
             reticleMesh.matrix.compose(
-              new THREE.Vector3(p.x,p.y,p.z),
-              new THREE.Quaternion(r.x,r.y,r.z,r.w),
-              new THREE.Vector3(1,1,1)
+              new THREE.Vector3(p.x, p.y, p.z),
+              new THREE.Quaternion(r.x, r.y, r.z, r.w),
+              new THREE.Vector3(1, 1, 1)
             );
-          } else { reticleMesh.visible = false; }
-        } catch(_) {}
+            reticleMesh.matrixWorldNeedsUpdate = true; // propagate to children
+
+            // Animate pulse ring
+            const pulse = reticleMesh.getObjectByName('reticle-pulse');
+            if (pulse) {
+              const s = 1 + 0.25 * Math.sin(performance.now() / 280);
+              pulse.scale.setScalar(s);
+              pulse.material.opacity = 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(performance.now() / 280));
+            }
+            // Ghost goal visibility rises with confidence
+            const ghost = reticleMesh.getObjectByName('reticle-ghost');
+            if (ghost) {
+              ghost.visible = true;
+              ghost.children.forEach(c => { if (c.material) c.material.opacity = t * 0.35; });
+            }
+
+            // Rotate direction arrow to always point toward camera (player side)
+            const dirArrow = reticleMesh.getObjectByName('reticle-dir-arrow');
+            if (dirArrow) {
+              dirArrow.rotation.y = Math.atan2(
+                camera.position.x - p.x,
+                camera.position.z - p.z
+              );
+              dirArrow.children.forEach(c => { if (c.material) c.material.opacity = 0.5 + t * 0.5; });
+            }
+
+            // Color: red → yellow → green
+            const color = t < 0.5
+              ? new THREE.Color().lerpColors(new THREE.Color(0xFF4444), new THREE.Color(0xFFD60A), t*2)
+              : new THREE.Color().lerpColors(new THREE.Color(0xFFD60A), new THREE.Color(0x70E000), (t-0.5)*2);
+            reticleMesh.material.color = color;
+
+            // Update placement button label
+            const btn = document.getElementById('btn-place-confirm');
+            if (btn) {
+              if (placementReady) {
+                btn.textContent = 'PLACE GOAL HERE';
+                btn.style.opacity = '1';
+                btn.style.pointerEvents = 'auto';
+              } else {
+                btn.textContent = `Scanning surface… ${Math.round(t*100)}%`;
+                btn.style.opacity = '0.65';
+                btn.style.pointerEvents = 'none';
+              }
+            }
+          } else {
+            surfaceConfidence = Math.max(surfaceConfidence - 2, 0);
+            reticleMesh.visible = false;
+          }
+        } catch(_) { reticleMesh.visible = false; }
       }
     },
   };
 }
 
-/** Tap handler — anchors gameGroup to detected floor surface. */
+/** Tap handler — anchors gameGroup to detected floor surface using multi-point average. */
 function onXR8Place(e) {
   if (gamePlaced) return;
+  if (!placementReady) return; // wait for surface confidence
   e.preventDefault && e.preventDefault();
-  const x=(e.touches?.[0]?.clientX??innerWidth/2)/innerWidth;
-  const y=(e.touches?.[0]?.clientY??innerHeight/2)/innerHeight;
-  try {
-    const hits = XR8.XrController.hitTest(x,y,['FEATURE_POINT','ESTIMATED_SURFACE']);
-    if (hits.length > 0) {
-      const {position:p, rotation:r} = hits[0];
-      gameGroup.position.set(p.x,p.y,p.z);
-      gameGroup.quaternion.set(r.x,r.y,r.z,r.w);
-      gameGroup.visible=true; gamePlaced=true; reticleMesh.visible=false;
-      document.getElementById('xr8-hint')?.remove();
-      El.hud.classList.remove('screen-hidden');
-      El.swipeHint.classList.remove('screen-hidden');
-      startGame();
-    }
-  } catch(ex) { console.error('XR8 place:', ex); }
+  const cx=(e.touches?.[0]?.clientX??innerWidth/2)/innerWidth;
+  const cy=(e.touches?.[0]?.clientY??innerHeight/2)/innerHeight;
+
+  // Multi-point hit-test: sample 5 points and average for stability
+  const offsets = [[0,0],[-.02,-.02],[.02,-.02],[-.02,.02],[.02,.02]];
+  const results = [];
+  for (const [ox,oy] of offsets) {
+    try {
+      const hits = XR8.XrController.hitTest(
+        Math.max(0.05, Math.min(0.95, cx+ox)),
+        Math.max(0.05, Math.min(0.95, cy+oy)),
+        ['FEATURE_POINT','ESTIMATED_SURFACE']
+      );
+      if (hits.length > 0) results.push(hits[0]);
+    } catch(_) {}
+  }
+
+  if (results.length > 0) {
+    // Average all hit positions for a more stable placement
+    const avg = results.reduce((acc,h) => {
+      acc.x += h.position.x; acc.y += h.position.y; acc.z += h.position.z;
+      return acc;
+    }, {x:0,y:0,z:0});
+    avg.x /= results.length; avg.y /= results.length; avg.z /= results.length;
+    // Use rotation from the center hit
+    const {rotation: r} = results[0];
+    gameGroup.position.set(avg.x, avg.y, avg.z);
+    gameGroup.quaternion.set(r.x, r.y, r.z, r.w);
+    gameGroup.visible=true; gamePlaced=true; reticleMesh.visible=false;
+    document.getElementById('xr8-hint')?.remove();
+    El.hud.classList.remove('screen-hidden');
+    El.swipeHint.classList.remove('screen-hidden');
+    addRepositionButton();
+    startGame();
+  }
 }
 
 /* ════════════════════════════════════════
@@ -423,26 +578,57 @@ function showPlacementUI(useHitTest) {
     }
 
     if (!placed) {
-      // Fallback: place 1.2m in front of camera at floor level
+      // Fallback: place 1.5m in front of camera at floor level
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
       gameGroup.position.set(
-        camera.position.x + fwd.x * 1.2,
-        camera.position.y - 0.4,  // estimate floor
-        camera.position.z + fwd.z * 1.2
+        camera.position.x + fwd.x * 1.5,
+        camera.position.y - 0.5,
+        camera.position.z + fwd.z * 1.5
       );
     }
 
     gameGroup.visible = true;
     gamePlaced = true;
+    surfaceConfidence = 0;
     if (reticleMesh) reticleMesh.visible = false;
     overlay.remove();
     El.hud.classList.remove('screen-hidden');
     El.swipeHint.classList.remove('screen-hidden');
+    addRepositionButton();
     startGame();
   };
 }
 
-
+/** Add a "🔄 Reposition" floating button during gameplay */
+function addRepositionButton() {
+  const existing = document.getElementById('btn-reposition');
+  if (existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.id = 'btn-reposition';
+  btn.textContent = '🔄 Reposition';
+  btn.style.cssText = `
+    position:fixed;top:66px;right:12px;z-index:200;
+    background:rgba(0,0,0,0.55);color:#FFD60A;border:1px solid rgba(255,214,10,0.4);
+    padding:8px 14px;border-radius:20px;font-size:12px;font-weight:700;
+    font-family:Plus Jakarta Sans,sans-serif;letter-spacing:0.05em;
+    cursor:pointer;backdrop-filter:blur(8px);
+  `;
+  btn.onclick = () => {
+    gamePlaced = false;
+    surfaceConfidence = 0;
+    placementReady = false;
+    gameGroup.visible = false;
+    if (reticleMesh) reticleMesh.visible = true;
+    S.active = false;
+    clearInterval(gameTimerInterval);
+    El.hud.classList.add('screen-hidden');
+    El.swipeHint.classList.add('screen-hidden');
+    El.gameover.classList.add('screen-hidden');
+    btn.remove();
+    showPlacementUI(true);
+  };
+  document.body.appendChild(btn);
+}
 
 function buildGround() {
   // Thin shadow-receiving disc — no opaque green plane; camera feed IS the floor
@@ -469,15 +655,39 @@ function buildTrajectoryDots() {
 }
 
 function addYupiBanner() {
-  const cvs=document.createElement('canvas'); cvs.width=512; cvs.height=128;
-  const ctx=cvs.getContext('2d');
-  ctx.fillStyle='#F7C948';
-  ctx.beginPath(); ctx.roundRect(0,0,512,128,20); ctx.fill();
-  ctx.font='bold 96px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],90+i*110,64); });
-  const b=new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W * 1.1, 0.2),
-    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
-  b.position.set(0, CFG.GOAL_H + 0.08, CFG.GOAL_Z); gameGroup.add(b);
+  // Use the actual Yupi Logo PNG as a 3D billboard above the goal
+  const loader = new THREE.TextureLoader();
+  loader.load(
+    'assets/Yupi%20Logo.png',
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // Calculate proportional size based on image aspect ratio
+      const aspect = (tex.image.width || 512) / (tex.image.height || 512);
+      const w = CFG.GOAL_W * 0.75;
+      const h = w / aspect;
+      const b = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide, transparent: true, alphaTest: 0.05})
+      );
+      b.position.set(0, CFG.GOAL_H + h * 0.5 + 0.06, CFG.GOAL_Z);
+      gameGroup.add(b);
+    },
+    undefined,
+    () => {
+      // Fallback: canvas text banner if image fails
+      const cvs = document.createElement('canvas'); cvs.width=512; cvs.height=128;
+      const ctx = cvs.getContext('2d');
+      ctx.fillStyle='#F7C948';
+      ctx.beginPath(); ctx.roundRect(0,0,512,128,20); ctx.fill();
+      ctx.font='bold 96px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],90+i*110,64); });
+      const b = new THREE.Mesh(
+        new THREE.PlaneGeometry(CFG.GOAL_W * 0.75, 0.18),
+        new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide})
+      );
+      b.position.set(0, CFG.GOAL_H + 0.12, CFG.GOAL_Z); gameGroup.add(b);
+    }
+  );
 }
 
 /* ── Confetti particles ── */
@@ -797,70 +1007,143 @@ function showBootError(msg) {
 }
 
 /* ════════════════════════════════════════
-   BOOT — load GLB assets then build scene
+   BOOT — load assets then build scene
 ════════════════════════════════════════ */
+
+/** Fetch a binary file with real-time progress reporting. */
+async function fetchWithProgress(url, onProgress) {
+  const resp = await fetch(url);
+  const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+  if (!total || !resp.body) {
+    // No content-length — fall back to direct blob
+    const blob = await resp.blob();
+    onProgress(1);
+    return URL.createObjectURL(blob);
+  }
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(received / total);
+  }
+  const blob = new Blob(chunks);
+  return URL.createObjectURL(blob);
+}
+
+/** Load GLB with real progress even for large files. */
+async function loadGLTFWithProgress(url, label, barStart, barEnd) {
+  const mb = n => (n / 1048576).toFixed(1);
+  const pct = p => Math.round((barStart + (barEnd - barStart) * p));
+
+  // First fetch with progress, then parse
+  let blobUrl = url;
+  try {
+    const resp = await fetch(url, {method:'HEAD'});
+    const size = parseInt(resp.headers.get('Content-Length') || '0', 10);
+    const sizeLabel = size ? ` (${mb(size)} MB)` : '';
+    El.splashHint.textContent = `${label}${sizeLabel}…`;
+    El.splashBar.style.width = pct(0) + '%';
+
+    blobUrl = await fetchWithProgress(url, p => {
+      const loadedMB = size ? ` ${mb(p * size)}/${mb(size)} MB` : '';
+      El.splashHint.textContent = `${label}${loadedMB}…`;
+      El.splashBar.style.width = pct(p) + '%';
+    });
+  } catch(e) {
+    // If fetch fails, fall back to GLTFLoader progress
+    El.splashHint.textContent = `${label}…`;
+  }
+
+  const model = await loadGLTF(blobUrl, p => {
+    El.splashBar.style.width = pct(0.9 + p * 0.1) + '%';
+  });
+  // Clean up blob URL
+  if (blobUrl !== url) URL.revokeObjectURL(blobUrl);
+  El.splashBar.style.width = pct(1) + '%';
+  return model;
+}
+
 async function boot() {
   try {
-    El.splashBar.style.width='5%';
+    El.splashBar.style.width='2%';
     El.splashHint.textContent='Initializing…';
-    clock = new THREE.Clock(); // gameGroup already created at module level
+    clock = new THREE.Clock();
 
-    // Ball: always use a visible procedural sphere (bola.glb materials are unreliable)
-    const ballGroup = new THREE.Group();
-    const ballSphere = new THREE.Mesh(
-      new THREE.SphereGeometry(0.13, 32, 32),
-      new THREE.MeshStandardMaterial({color:0xE31E24, roughness:0.35, metalness:0.05})
-    );
-    ballSphere.castShadow = true;
-    // Black pentagon patches for soccer look
-    const patchMat = new THREE.MeshStandardMaterial({color:0x111111, roughness:0.5});
-    [0,60,120,180,240,300].forEach(deg => {
-      const patch = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,8), patchMat);
-      const r = Math.PI*deg/180;
-      patch.position.set(Math.cos(r)*0.11, 0.06, Math.sin(r)*0.11);
-      ballGroup.add(patch);
-    });
-    ballGroup.add(ballSphere);
-    ballGroup.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    ballGroup.castShadow = true;
-    gameGroup.add(ballGroup);
-    ballMesh = ballGroup;
-    El.splashBar.style.width = '25%';
+    // ── Step 1: Wait for XR8 engine (loaded async) ─────────────────────
+    El.splashHint.textContent='Loading AR engine…';
+    El.splashBar.style.width='5%';
+    if (!window.XR8) {
+      await new Promise(resolve => {
+        let elapsed = 0;
+        const poll = setInterval(() => {
+          elapsed += 200;
+          // Animate the bar while waiting
+          const fake = 5 + Math.min(elapsed / 80, 12);
+          El.splashBar.style.width = fake + '%';
+          if (window.XR8) { clearInterval(poll); resolve(); }
+          // If taking >15s, show warning
+          if (elapsed > 15000) {
+            El.splashHint.textContent = 'Slow connection — still loading AR engine…';
+          }
+        }, 200);
+        window.addEventListener('xrloaded', () => { clearInterval(poll); resolve(); }, {once:true});
+      });
+    }
+    El.splashBar.style.width='18%';
+    El.splashHint.textContent='AR engine ready';
+    await new Promise(r=>setTimeout(r,200));
 
-    El.splashBar.style.width='28%';
-    El.splashHint.textContent='Loading goal…';
-    const gawangGLB = await loadGLTF('assets/gawang.glb', p=>{
-      El.splashBar.style.width=(28+p*17)+'%';
-    });
+    // ── Step 2: Load ball (bola.glb) ──────────────────────────────────
+    const bolaGLB = await loadGLTFWithProgress('assets/bola.glb', 'Loading ball', 18, 35);
+    normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
+    fixFBXMaterials(bolaGLB);
+    bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    bolaGLB.castShadow = true;
+    bolaGLB.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    gameGroup.add(bolaGLB);
+    ballMesh = bolaGLB;
+    El.splashBar.style.width='35%';
+
+    // ── Step 3: Load goalpost ──────────────────────────────────────────
+    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', 'Loading goalpost', 35, 52);
     normalizeFBXByHeight(gawangGLB, CFG.GOAL_H);
     gawangGLB.position.set(0, 0, CFG.GOAL_Z);
     fixFBXMaterials(gawangGLB);
     gameGroup.add(gawangGLB);
-    gawangMesh=gawangGLB;
+    gawangMesh = gawangGLB;
 
-    El.splashBar.style.width='46%';
-    El.splashHint.textContent='Loading Reddie…';
-    const reddieGLB = await loadGLTF('assets/reddie.glb', p=>{
-      El.splashBar.style.width=(46+p*44)+'%';
-    });
-    // Reddie = ~80% of goal height so he fits inside goal frame
-    normalizeFBXByHeight(reddieGLB, CFG.GOAL_H * 0.8);
-    reddieGLB.position.set(0, 0, CFG.GOAL_Z + 0.06);
-    fixFBXMaterials(reddieGLB);
-    if(reddieGLB.animations && reddieGLB.animations.length>0){
-      mixer=new THREE.AnimationMixer(reddieGLB);
-      mixer.clipAction(reddieGLB.animations[0]).play();
+    // ── Step 4: Load Goalkeeper ────────────────────────────────────────
+    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', 'Loading Goalkeeper', 52, 95);
+    const keeperBox = new THREE.Box3().setFromObject(keeperGLB);
+    const keeperSize = new THREE.Vector3();
+    keeperBox.getSize(keeperSize);
+    const isFullScene = Math.max(keeperSize.x, keeperSize.z) > 1.5;
+    if (isFullScene) {
+      // Full scene GLB (goal + keeper merged) — normalize to goal width
+      normalizeFBX(keeperGLB, CFG.GOAL_W * 1.0);
+      keeperGLB.position.set(0, 0, CFG.GOAL_Z);
+      gawangGLB.visible = false;
+    } else {
+      // Keeper-only GLB — scale to 45% of goal height so it fits INSIDE the frame
+      normalizeFBXByHeight(keeperGLB, CFG.GOAL_H * 0.45);
+      keeperGLB.position.set(0, 0, CFG.GOAL_Z + 0.05);
     }
-    gameGroup.add(reddieGLB);
-    keeperMesh=reddieGLB;
+    fixFBXMaterials(keeperGLB);
+    if (keeperGLB.animations && keeperGLB.animations.length > 0) {
+      mixer = new THREE.AnimationMixer(keeperGLB);
+      mixer.clipAction(keeperGLB.animations[0]).play();
+    }
+    gameGroup.add(keeperGLB);
+    keeperMesh = keeperGLB;
 
-    El.splashBar.style.width='95%';
-    El.splashHint.textContent='Almost ready…';
-
+    // ── Done ───────────────────────────────────────────────────────────
     El.splashBar.style.width='100%';
     El.splashHint.textContent='Ready!';
-    await new Promise(r=>setTimeout(r,300));
-
+    await new Promise(r=>setTimeout(r,400));
     El.splash.classList.add('screen-hidden');
     El.regScreen.classList.remove('screen-hidden');
 

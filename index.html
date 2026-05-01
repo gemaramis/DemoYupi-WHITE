@@ -28,7 +28,7 @@
   <div class="splash-bg"></div>
   <div class="splash-content">
     <div class="splash-logo">
-      <img src="assets/logo.png" class="yupi-logo-img" alt="Yupi"/>
+      <img src="assets/Yupi%20Logo.png" class="yupi-logo-img" alt="Yupi"/>
     </div>
     <div class="splash-tagline">GUMMY FUN, GOAL WON!</div>
     <div class="splash-ball">⚽</div>
@@ -39,13 +39,18 @@
       margin-top: 16px;
       display: flex; align-items: center; gap: 8px; justify-content: center;
       font-family: 'Plus Jakarta Sans', sans-serif; font-size: 11px; font-weight: 700;
-      letter-spacing: 0.08em; opacity: 0.65;
+      letter-spacing: 0.08em; opacity: 0.7;
     ">
       <span style="
         background: rgba(255,199,3,0.18); color: #FFD700;
         border: 1px solid rgba(255,199,3,0.4);
         padding: 3px 10px; border-radius: 20px;
-      ">v1.0.0</span>
+      " id="version-label">v2.0.0</span>
+      <span style="
+        background: rgba(80,200,120,0.18); color: #70E000;
+        border: 1px solid rgba(80,200,120,0.4);
+        padding: 3px 10px; border-radius: 20px;
+      " id="env-label">PROD</span>
     </div>
   </div>
 </div>
@@ -55,7 +60,7 @@
   <div class="start-bg"></div>
   <div class="reg-card">
     <div class="reg-logo-wrap">
-      <img src="assets/logo.png" class="yupi-logo-img reg-logo-img" alt="Yupi"/>
+      <img src="assets/Yupi%20Logo.png" class="yupi-logo-img reg-logo-img" alt="Yupi"/>
     </div>
     <div class="start-subtitle">WORLD CUP AR</div>
     <p class="reg-desc">ENTER NICKNAME</p>
@@ -71,19 +76,20 @@
   <div class="start-bg"></div>
   <div class="start-card">
     <div class="start-logo-wrap">
-      <img src="assets/logo.png" class="yupi-logo-img" alt="Yupi"/>
+      <img src="assets/Yupi%20Logo.png" class="yupi-logo-img" alt="Yupi"/>
     </div>
     <div class="start-subtitle">WORLD CUP AR</div>
-    <img src="assets/ball.png" class="start-ball-img" alt="Yupi Soccer Ball"/>
+    <img src="assets/bola.png" class="start-ball-img" alt="Yupi Soccer Ball"
+         onerror="this.src='assets/ball.png'"/>
     <p class="start-desc" id="ar-instructions">
       Point camera at the <strong>floor</strong> until<br/>
-      a <strong>gold ring</strong> appears — then<br/>
+      a <strong>gold ring</strong> appears &mdash; then<br/>
       <strong>tap to place</strong> the goal!
     </p>
     <button id="btn-start" class="yupi-btn yupi-btn-green">
-      <span>⚽ TAP TO PLAY</span>
+      <span>TAP TO PLAY</span>
     </button>
-    <p class="start-note" id="ar-mode-note">📷 Camera + AR permission required</p>
+    <p class="start-note" id="ar-mode-note">Camera &amp; AR permission required</p>
   </div>
 </div>
 
@@ -184,8 +190,8 @@
   </div>
 </div>
 
-<!-- 8th Wall XR engine (open-source, no App Key) – must load before game.js -->
-<script crossorigin="anonymous"
+<!-- 8th Wall XR engine (open-source, no App Key) - loads async so splash doesn't block -->
+<script async crossorigin="anonymous"
         src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1/dist/xr.js"
         data-preload-chunks="slam">
 </script>
