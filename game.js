@@ -189,12 +189,52 @@ function buildGamePipelineModule() {
       gameGroup.visible = false; scene.add(gameGroup);
       buildGround(); buildTrajectoryDots(); addYupiBanner(); buildConfettiPool();
 
-      // Gold reticle
-      const rg = new THREE.RingGeometry(0.12,0.18,32).rotateX(-Math.PI/2);
-      reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({color:0xFFD700,side:THREE.DoubleSide}));
-      reticleMesh.matrixAutoUpdate = false; reticleMesh.visible = false; scene.add(reticleMesh);
+      // Gold reticle — enhanced with pulsing rings + goal ghost preview
+      const rg = new THREE.RingGeometry(0.20, 0.28, 48).rotateX(-Math.PI/2);
+      reticleMesh = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({
+        color: 0xFFD700, side: THREE.DoubleSide, transparent: true, opacity: 0.95
+      }));
+      reticleMesh.matrixAutoUpdate = false;
+      reticleMesh.visible = false;
 
-      // Swipe shoot controls + placement tap
+      // Inner cross/dot
+      const innerDot = new THREE.Mesh(
+        new THREE.CircleGeometry(0.04, 16).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFFFFF, side:THREE.DoubleSide, transparent:true, opacity:0.9})
+      );
+      innerDot.name = 'reticle-inner'; reticleMesh.add(innerDot);
+
+      // Outer pulse ring
+      const pulseRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.30, 0.34, 48).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide, transparent:true, opacity:0.3})
+      );
+      pulseRing.name = 'reticle-pulse'; reticleMesh.add(pulseRing);
+
+      // Ghost goal footprint (2 vertical posts + crossbar at reticle position)
+      const postMat = new THREE.MeshBasicMaterial({color:0xFFFFFF, transparent:true, opacity:0.25, side:THREE.DoubleSide});
+      const ghostGoal = new THREE.Group();
+      ghostGoal.name = 'reticle-ghost';
+      // Left post
+      const lp = new THREE.Mesh(new THREE.PlaneGeometry(0.03, CFG.GOAL_H), postMat.clone());
+      lp.position.set(-CFG.GOAL_W/2, CFG.GOAL_H/2, 0); ghostGoal.add(lp);
+      // Right post
+      const rp = lp.clone(); rp.position.set(CFG.GOAL_W/2, CFG.GOAL_H/2, 0); ghostGoal.add(rp);
+      // Crossbar
+      const cb = new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W, 0.03), postMat.clone());
+      cb.position.set(0, CFG.GOAL_H, 0); ghostGoal.add(cb);
+      // Arrow pointing inward (facing camera)
+      const arrowMesh = new THREE.Mesh(
+        new THREE.ConeGeometry(0.06, 0.15, 6).rotateX(Math.PI/2),
+        new THREE.MeshBasicMaterial({color:0xFFD700, transparent:true, opacity:0.7})
+      );
+      arrowMesh.position.set(0, 0.12, 0); ghostGoal.add(arrowMesh);
+      reticleMesh.add(ghostGoal);
+
+      scene.add(reticleMesh);
+      // Higher quality rendering
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
       initSwipeControls(canvas);
       canvas.addEventListener('touchstart', onXR8Place, {passive:false});
       canvas.addEventListener('click', ()=>onXR8Place({touches:[{clientX:innerWidth/2,clientY:innerHeight/2}]}));
@@ -217,16 +257,31 @@ function buildGamePipelineModule() {
           if (hits.length > 0) {
             surfaceConfidence = Math.min(surfaceConfidence + 1, CFG.SURFACE_CONFIDENCE_NEEDED + 10);
             placementReady = surfaceConfidence >= CFG.SURFACE_CONFIDENCE_NEEDED;
+            const t = Math.min(surfaceConfidence / CFG.SURFACE_CONFIDENCE_NEEDED, 1);
 
             const {position:p, rotation:r} = hits[0];
             reticleMesh.visible = true;
             reticleMesh.matrix.compose(
               new THREE.Vector3(p.x, p.y, p.z),
               new THREE.Quaternion(r.x, r.y, r.z, r.w),
-              new THREE.Vector3(1,1,1)
+              new THREE.Vector3(1, 1, 1)
             );
-            // Color: red → yellow → green based on confidence
-            const t = Math.min(surfaceConfidence / CFG.SURFACE_CONFIDENCE_NEEDED, 1);
+
+            // Animate pulse ring
+            const pulse = reticleMesh.getObjectByName('reticle-pulse');
+            if (pulse) {
+              const s = 1 + 0.25 * Math.sin(performance.now() / 280);
+              pulse.scale.setScalar(s);
+              pulse.material.opacity = 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(performance.now() / 280));
+            }
+            // Ghost goal visibility rises with confidence
+            const ghost = reticleMesh.getObjectByName('reticle-ghost');
+            if (ghost) {
+              ghost.visible = true;
+              ghost.children.forEach(c => { if (c.material) c.material.opacity = t * 0.35; });
+            }
+
+            // Color: red → yellow → green
             const color = t < 0.5
               ? new THREE.Color().lerpColors(new THREE.Color(0xFF4444), new THREE.Color(0xFFD60A), t*2)
               : new THREE.Color().lerpColors(new THREE.Color(0xFFD60A), new THREE.Color(0x70E000), (t-0.5)*2);
@@ -554,15 +609,39 @@ function buildTrajectoryDots() {
 }
 
 function addYupiBanner() {
-  const cvs=document.createElement('canvas'); cvs.width=512; cvs.height=128;
-  const ctx=cvs.getContext('2d');
-  ctx.fillStyle='#F7C948';
-  ctx.beginPath(); ctx.roundRect(0,0,512,128,20); ctx.fill();
-  ctx.font='bold 96px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],90+i*110,64); });
-  const b=new THREE.Mesh(new THREE.PlaneGeometry(CFG.GOAL_W * 1.1, 0.2),
-    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide}));
-  b.position.set(0, CFG.GOAL_H + 0.08, CFG.GOAL_Z); gameGroup.add(b);
+  // Use the actual Yupi Logo PNG as a 3D billboard above the goal
+  const loader = new THREE.TextureLoader();
+  loader.load(
+    'assets/Yupi%20Logo.png',
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // Calculate proportional size based on image aspect ratio
+      const aspect = (tex.image.width || 512) / (tex.image.height || 512);
+      const w = CFG.GOAL_W * 0.75;
+      const h = w / aspect;
+      const b = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide, transparent: true, alphaTest: 0.05})
+      );
+      b.position.set(0, CFG.GOAL_H + h * 0.5 + 0.06, CFG.GOAL_Z);
+      gameGroup.add(b);
+    },
+    undefined,
+    () => {
+      // Fallback: canvas text banner if image fails
+      const cvs = document.createElement('canvas'); cvs.width=512; cvs.height=128;
+      const ctx = cvs.getContext('2d');
+      ctx.fillStyle='#F7C948';
+      ctx.beginPath(); ctx.roundRect(0,0,512,128,20); ctx.fill();
+      ctx.font='bold 96px Fredoka One,Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ['#E31E24','#0055B3','#FFFFFF','#00A34A'].forEach((c,i)=>{ ctx.fillStyle=c; ctx.fillText('Yupi'[i],90+i*110,64); });
+      const b = new THREE.Mesh(
+        new THREE.PlaneGeometry(CFG.GOAL_W * 0.75, 0.18),
+        new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(cvs),side:THREE.DoubleSide})
+      );
+      b.position.set(0, CFG.GOAL_H + 0.12, CFG.GOAL_Z); gameGroup.add(b);
+    }
+  );
 }
 
 /* ── Confetti particles ── */
@@ -1010,12 +1089,14 @@ async function boot() {
     keeperBox.getSize(keeperSize);
     const isFullScene = Math.max(keeperSize.x, keeperSize.z) > 1.5;
     if (isFullScene) {
-      normalizeFBX(keeperGLB, CFG.GOAL_W * 1.2);
+      // Full scene GLB (goal + keeper merged) — normalize to goal width
+      normalizeFBX(keeperGLB, CFG.GOAL_W * 1.0);
       keeperGLB.position.set(0, 0, CFG.GOAL_Z);
       gawangGLB.visible = false;
     } else {
-      normalizeFBXByHeight(keeperGLB, CFG.GOAL_H * 0.9);
-      keeperGLB.position.set(0, 0, CFG.GOAL_Z + 0.08);
+      // Keeper-only GLB — scale to 45% of goal height so it fits INSIDE the frame
+      normalizeFBXByHeight(keeperGLB, CFG.GOAL_H * 0.45);
+      keeperGLB.position.set(0, 0, CFG.GOAL_Z + 0.05);
     }
     fixFBXMaterials(keeperGLB);
     if (keeperGLB.animations && keeperGLB.animations.length > 0) {
