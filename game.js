@@ -258,7 +258,7 @@ function buildGamePipelineModule() {
       youCtx.beginPath(); youCtx.roundRect(0,0,128,40,8); youCtx.fill();
       youCtx.fillStyle = '#1a1400';
       youCtx.font = 'bold 24px Arial'; youCtx.textAlign='center'; youCtx.textBaseline='middle';
-      youCtx.fillText('YOU 📱', 64, 20);
+      youCtx.fillText('YOU', 64, 20);
       const youLabel = new THREE.Mesh(
         new THREE.PlaneGeometry(0.16, 0.05).rotateX(-Math.PI/2),
         new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(youCvs), side:THREE.DoubleSide, transparent:true})
@@ -301,6 +301,7 @@ function buildGamePipelineModule() {
               new THREE.Quaternion(r.x, r.y, r.z, r.w),
               new THREE.Vector3(1, 1, 1)
             );
+            reticleMesh.matrixWorldNeedsUpdate = true; // propagate to children
 
             // Animate pulse ring
             const pulse = reticleMesh.getObjectByName('reticle-pulse');
@@ -336,11 +337,11 @@ function buildGamePipelineModule() {
             const btn = document.getElementById('btn-place-confirm');
             if (btn) {
               if (placementReady) {
-                btn.textContent = '⚽ PLACE GOAL HERE';
+                btn.textContent = 'PLACE GOAL HERE';
                 btn.style.opacity = '1';
                 btn.style.pointerEvents = 'auto';
               } else {
-                btn.textContent = `🔴 Scanning surface… ${Math.round(t*100)}%`;
+                btn.textContent = `Scanning surface… ${Math.round(t*100)}%`;
                 btn.style.opacity = '0.65';
                 btn.style.pointerEvents = 'none';
               }
@@ -1069,11 +1070,11 @@ async function loadGLTFWithProgress(url, label, barStart, barEnd) {
 async function boot() {
   try {
     El.splashBar.style.width='2%';
-    El.splashHint.textContent='⏳ Initializing…';
+    El.splashHint.textContent='Initializing…';
     clock = new THREE.Clock();
 
     // ── Step 1: Wait for XR8 engine (loaded async) ─────────────────────
-    El.splashHint.textContent='📡 Loading AR engine…';
+    El.splashHint.textContent='Loading AR engine…';
     El.splashBar.style.width='5%';
     if (!window.XR8) {
       await new Promise(resolve => {
@@ -1086,18 +1087,18 @@ async function boot() {
           if (window.XR8) { clearInterval(poll); resolve(); }
           // If taking >15s, show warning
           if (elapsed > 15000) {
-            El.splashHint.textContent = '⚠️ Slow network — still loading AR engine…';
+            El.splashHint.textContent = 'Slow connection — still loading AR engine…';
           }
         }, 200);
         window.addEventListener('xrloaded', () => { clearInterval(poll); resolve(); }, {once:true});
       });
     }
     El.splashBar.style.width='18%';
-    El.splashHint.textContent='✅ AR engine ready';
+    El.splashHint.textContent='AR engine ready';
     await new Promise(r=>setTimeout(r,200));
 
     // ── Step 2: Load ball (bola.glb) ──────────────────────────────────
-    const bolaGLB = await loadGLTFWithProgress('assets/bola.glb', '⚽ Loading ball', 18, 35);
+    const bolaGLB = await loadGLTFWithProgress('assets/bola.glb', 'Loading ball', 18, 35);
     normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
     fixFBXMaterials(bolaGLB);
     bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
@@ -1108,7 +1109,7 @@ async function boot() {
     El.splashBar.style.width='35%';
 
     // ── Step 3: Load goalpost ──────────────────────────────────────────
-    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', '🥅 Loading goalpost', 35, 52);
+    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', 'Loading goalpost', 35, 52);
     normalizeFBXByHeight(gawangGLB, CFG.GOAL_H);
     gawangGLB.position.set(0, 0, CFG.GOAL_Z);
     fixFBXMaterials(gawangGLB);
@@ -1116,7 +1117,7 @@ async function boot() {
     gawangMesh = gawangGLB;
 
     // ── Step 4: Load Goalkeeper ────────────────────────────────────────
-    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', '🧤 Loading Goalkeeper', 52, 95);
+    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', 'Loading Goalkeeper', 52, 95);
     const keeperBox = new THREE.Box3().setFromObject(keeperGLB);
     const keeperSize = new THREE.Vector3();
     keeperBox.getSize(keeperSize);
@@ -1141,7 +1142,7 @@ async function boot() {
 
     // ── Done ───────────────────────────────────────────────────────────
     El.splashBar.style.width='100%';
-    El.splashHint.textContent='✨ Ready!';
+    El.splashHint.textContent='Ready!';
     await new Promise(r=>setTimeout(r,400));
     El.splash.classList.add('screen-hidden');
     El.regScreen.classList.remove('screen-hidden');

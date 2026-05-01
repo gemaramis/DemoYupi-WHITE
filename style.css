@@ -157,7 +157,14 @@ html,body{
   font-family:var(--font-display);font-size:0.9rem;letter-spacing:4px;
   color:var(--orange);text-transform:uppercase;
 }
-.start-ball-img{width:100px;height:100px;object-fit:contain;animation:floatImg 2.5s ease-in-out infinite alternate}
+.start-ball-img{
+  width:110px;height:110px;
+  border-radius:50%;
+  object-fit:cover;
+  object-position:center;
+  animation:floatImg 2.5s ease-in-out infinite alternate;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+}
 @keyframes floatImg{from{transform:translateY(0) rotate(-5deg)}to{transform:translateY(-12px) rotate(5deg)}}
 .start-desc{font-size:0.9rem;color:var(--on-dark-sub);line-height:1.65}
 .start-desc strong{color:var(--yellow);opacity:1}
