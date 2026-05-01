@@ -854,10 +854,14 @@ function shoot(aimX, aimY, power) {
   (function fly(now){
     const t=Math.min((now-t0)/dur,1);
     const e=t<0.5?2*t*t:-1+(4-2*t)*t;
-    ballMesh.position.set(sx+(aimX-sx)*e, sy+(aimY-sy)*e+Math.sin(t*Math.PI)*0.5, sz+(CFG.GOAL_Z-sz)*e);
-    ballMesh.rotation.x+=0.15; ballMesh.rotation.z+=0.07;
-    if(t<1) requestAnimationFrame(fly);
-    else resolveShot(aimX,aimY);
+    ballMesh.position.set(
+      sx+(aimX-sx)*e,
+      sy+(aimY-sy)*e+Math.sin(t*Math.PI)*(0.35+power*0.5),
+      sz+(CFG.GOAL_Z-sz)*e
+    );
+    ballMesh.rotation.x+=0.18; ballMesh.rotation.z+=0.08;
+    if(t<1){ requestAnimationFrame(fly); }
+    else   { resolveShot(aimX,aimY); }
   })(t0);
 }
 
@@ -868,25 +872,79 @@ function resolveShot(bx, by) {
   if(saved){
     S.saves++; El.scoreCandy.textContent=S.saves;
     Snd.save();
-    // Keeper dive tilt
-    if(keeperMesh) { keeperMesh.rotation.z = bx > kx ? -0.7 : 0.7; setTimeout(()=>{ if(keeperMesh) keeperMesh.rotation.z=0; },600); }
+    if(keeperMesh){ keeperMesh.rotation.z=bx>kx?-0.7:0.7; setTimeout(()=>{ if(keeperMesh) keeperMesh.rotation.z=0; },600); }
     showFeedback('😅','SAVED!','saved');
+    _bounceBallBack();
   } else if(goal){
     S.goals++; S.points+=CFG.POINTS_PER_GOAL;
     El.scoreYou.textContent=S.points;
     El.scoreYou.classList.remove('pop'); void El.scoreYou.offsetWidth; El.scoreYou.classList.add('pop');
     Snd.goal();
-    burstConfetti(bx, by, CFG.GOAL_Z+0.2);
+    burstConfetti(bx, by, CFG.GOAL_Z+0.1);
     showFeedback('⚽','GOAL!','goal');
+    _driveIntoNet(bx, by);
   } else {
     Snd.miss();
     showFeedback('😬','MISS!','miss');
+    _bounceBallBack();
   }
-  setTimeout(()=>{
-    ballMesh.position.set(0,CFG.BALL_Y,CFG.BALL_Z); ballMesh.rotation.set(0,0,0);
-    S.shooting=false;
-  },1000);
 }
+
+/** Ball continues deeper into the net, then fades + shrinks before resetting. */
+function _driveIntoNet(bx, by) {
+  const netZ    = CFG.GOAL_Z - 0.22;
+  const startPos = ballMesh.position.clone();
+  const dur = 300; const t0 = performance.now();
+  const ballMats = [];
+  ballMesh.traverse(c => { if(c.isMesh && c.material){ c.material = c.material.clone(); c.material.transparent=true; ballMats.push(c.material); } });
+  (function drive(now) {
+    const t = Math.min((now-t0)/dur, 1);
+    ballMesh.position.set(
+      startPos.x + (bx - startPos.x)*t*0.25,
+      startPos.y - 0.05*t,
+      startPos.z + (netZ - startPos.z)*t
+    );
+    ballMesh.rotation.x += 0.05;
+    if(t<1){ requestAnimationFrame(drive); }
+    else {
+      // Fade + shrink
+      const t1=performance.now();
+      (function fadeOut(now2){
+        const tf=Math.min((now2-t1)/380, 1);
+        ballMesh.scale.setScalar(1-tf);
+        ballMats.forEach(m=>m.opacity=1-tf);
+        if(tf<1){ requestAnimationFrame(fadeOut); }
+        else { _resetBall(); }
+      })(t1);
+    }
+  })(t0);
+}
+
+/** Ball bounces back toward camera on save or miss. */
+function _bounceBallBack() {
+  const startPos = ballMesh.position.clone();
+  const targetZ  = CFG.BALL_Z + 0.1;
+  const dur = 380; const t0 = performance.now();
+  (function bounce(now){
+    const t = Math.min((now-t0)/dur, 1);
+    const e = 1-(1-t)*(1-t);
+    ballMesh.position.z = startPos.z + (targetZ-startPos.z)*e;
+    ballMesh.position.y = startPos.y + Math.sin(t*Math.PI)*0.10;
+    ballMesh.rotation.x -= 0.09;
+    if(t<1){ requestAnimationFrame(bounce); }
+    else { _resetBall(); }
+  })(t0);
+}
+
+/** Reset ball to kick position. */
+function _resetBall() {
+  ballMesh.scale.setScalar(1);
+  ballMesh.traverse(c => { if(c.isMesh && c.material){ c.material.opacity=1; c.material.transparent=false; } });
+  ballMesh.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+  ballMesh.rotation.set(0,0,0);
+  setTimeout(()=>{ S.shooting=false; }, 60);
+}
+
 
 /* ── Feedback ── */
 function showFeedback(emoji,text,cls) {
