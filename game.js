@@ -1157,13 +1157,40 @@ async function boot() {
 
     // ── Step 2: Load ball (bola.glb) ──────────────────────────────────
     const bolaGLB = await loadGLTFWithProgress('assets/bola.glb', 'Loading ball', 18, 35);
-    normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
     fixFBXMaterials(bolaGLB);
-    bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    bolaGLB.castShadow = true;
-    bolaGLB.traverse(c => { if (c.isMesh) c.castShadow = true; });
-    gameGroup.add(bolaGLB);
-    ballMesh = bolaGLB;
+
+    // bola.glb may contain multiple mesh instances — pick the one closest to origin
+    let mainBallMesh = null;
+    let minDist = Infinity;
+    bolaGLB.traverse(c => {
+      if (c.isMesh) {
+        const d = c.getWorldPosition(new THREE.Vector3()).length();
+        if (d < minDist) { minDist = d; mainBallMesh = c; }
+      }
+    });
+
+    const ballGroup = new THREE.Group();
+    if (mainBallMesh) {
+      // Detach from parent hierarchy, reset transform, then size it
+      mainBallMesh.removeFromParent();
+      mainBallMesh.position.set(0,0,0);
+      mainBallMesh.rotation.set(0,0,0);
+      // Scale to desired diameter
+      const bbox = new THREE.Box3().setFromObject(mainBallMesh);
+      const bsize = new THREE.Vector3(); bbox.getSize(bsize);
+      const ballDiam = CFG.BALL_RADIUS * 2.2;
+      const s = ballDiam / Math.max(bsize.x, bsize.y, bsize.z, 0.001);
+      mainBallMesh.scale.setScalar(s);
+      mainBallMesh.castShadow = true;
+      ballGroup.add(mainBallMesh);
+    } else {
+      // Fallback: use whole GLB if no individual mesh found
+      normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
+      ballGroup.add(bolaGLB);
+    }
+    ballGroup.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    gameGroup.add(ballGroup);
+    ballMesh = ballGroup;
     El.splashBar.style.width='35%';
 
     // ── Step 3: Load goalpost ──────────────────────────────────────────
