@@ -1171,16 +1171,18 @@ async function boot() {
 
     const ballGroup = new THREE.Group();
     if (mainBallMesh) {
-      // Detach from parent hierarchy, reset transform, then size it
+      // Detach from parent hierarchy, reset transform
       mainBallMesh.removeFromParent();
       mainBallMesh.position.set(0,0,0);
       mainBallMesh.rotation.set(0,0,0);
+      mainBallMesh.scale.setScalar(1); // CRITICAL: Reset scale before measuring
+      mainBallMesh.updateMatrixWorld(true);
       
       // Scale to desired diameter
       const bbox = new THREE.Box3().setFromObject(mainBallMesh);
       const bsize = new THREE.Vector3(); bbox.getSize(bsize);
       
-      // Calculate max dimension of the imported mesh
+      // Calculate max dimension of the true geometry
       const maxDim = Math.max(bsize.x, bsize.y, bsize.z, 0.001);
       
       // Scale it so its diameter matches 2 * CFG.BALL_RADIUS
