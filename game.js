@@ -529,6 +529,7 @@ function addRepositionButton() {
   document.body.appendChild(btn);
 }
 
+function buildGround() {
   // Thin shadow-receiving disc — no opaque green plane; camera feed IS the floor
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(0.6, 48),
