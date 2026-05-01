@@ -16,10 +16,10 @@ import { registerPlayer, saveScore, fetchLeaderboard, PlayerState } from './fire
 const CFG = {
   TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
   // Goal & gameplay sizing (tabletop AR — ~1:6 real-world scale)
-  GOAL_W: 1.2, GOAL_H: 0.55, GOAL_Z: -1.5,
+  GOAL_W: 1.6, GOAL_H: 0.55, GOAL_Z: -1.5,
   BALL_Y: 0.06, BALL_Z: 0.30,
   BALL_RADIUS: 0.16,
-  KEEPER_PATROL: 0.45, KEEPER_CYCLE: 2.2,
+  KEEPER_PATROL: 0.60, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
   // Surface detection
   SURFACE_CONFIDENCE_NEEDED: 25,  // frames before allowing placement
@@ -231,7 +231,42 @@ function buildGamePipelineModule() {
       arrowMesh.position.set(0, 0.12, 0); ghostGoal.add(arrowMesh);
       reticleMesh.add(ghostGoal);
 
-      scene.add(reticleMesh);
+      // ── Floor directional arrow (tracks camera to show YOUR side) ──
+      const dirArrowGroup = new THREE.Group();
+      dirArrowGroup.name = 'reticle-dir-arrow';
+      dirArrowGroup.position.y = 0.005; // just above floor
+      const arrowMat = new THREE.MeshBasicMaterial({color:0xFFD700, side:THREE.DoubleSide, transparent:true, opacity:0.9});
+      // Arrow body rectangle
+      const arrowBody = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.06, 0.30).rotateX(-Math.PI/2),
+        arrowMat.clone()
+      );
+      arrowBody.position.set(0, 0, 0.22);
+      dirArrowGroup.add(arrowBody);
+      // Arrowhead (triangle pointing away from camera)
+      const triGeo = new THREE.BufferGeometry();
+      triGeo.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([0,0,0,  -0.12,0,0.22,  0.12,0,0.22]), 3));
+      triGeo.setIndex([0,2,1]); triGeo.computeVertexNormals();
+      const arrowHead = new THREE.Mesh(triGeo, arrowMat.clone());
+      dirArrowGroup.add(arrowHead);
+      // "YOU" canvas label
+      const youCvs = document.createElement('canvas');
+      youCvs.width = 128; youCvs.height = 40;
+      const youCtx = youCvs.getContext('2d');
+      youCtx.fillStyle = 'rgba(255,214,10,0.9)';
+      youCtx.beginPath(); youCtx.roundRect(0,0,128,40,8); youCtx.fill();
+      youCtx.fillStyle = '#1a1400';
+      youCtx.font = 'bold 24px Arial'; youCtx.textAlign='center'; youCtx.textBaseline='middle';
+      youCtx.fillText('YOU 📱', 64, 20);
+      const youLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.16, 0.05).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(youCvs), side:THREE.DoubleSide, transparent:true})
+      );
+      youLabel.position.set(0, 0, 0.44);
+      dirArrowGroup.add(youLabel);
+      reticleMesh.add(dirArrowGroup);
+
       // Higher quality rendering
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(window.innerWidth, window.innerHeight);
@@ -279,6 +314,16 @@ function buildGamePipelineModule() {
             if (ghost) {
               ghost.visible = true;
               ghost.children.forEach(c => { if (c.material) c.material.opacity = t * 0.35; });
+            }
+
+            // Rotate direction arrow to always point toward camera (player side)
+            const dirArrow = reticleMesh.getObjectByName('reticle-dir-arrow');
+            if (dirArrow) {
+              dirArrow.rotation.y = Math.atan2(
+                camera.position.x - p.x,
+                camera.position.z - p.z
+              );
+              dirArrow.children.forEach(c => { if (c.material) c.material.opacity = 0.5 + t * 0.5; });
             }
 
             // Color: red → yellow → green
@@ -1051,31 +1096,19 @@ async function boot() {
     El.splashHint.textContent='✅ AR engine ready';
     await new Promise(r=>setTimeout(r,200));
 
-    // ── Step 2: Build procedural ball ──────────────────────────────────
-    El.splashHint.textContent='⚽ Building ball…';
-    El.splashBar.style.width='20%';
-    const ballGroup = new THREE.Group();
-    const ballSphere = new THREE.Mesh(
-      new THREE.SphereGeometry(CFG.BALL_RADIUS, 32, 32),
-      new THREE.MeshStandardMaterial({color:0xE31E24, roughness:0.35, metalness:0.05})
-    );
-    ballSphere.castShadow = true;
-    const patchMat = new THREE.MeshStandardMaterial({color:0x111111, roughness:0.5});
-    [0,60,120,180,240,300].forEach(deg => {
-      const patch = new THREE.Mesh(new THREE.SphereGeometry(CFG.BALL_RADIUS*0.28, 8, 8), patchMat);
-      const r = Math.PI*deg/180;
-      patch.position.set(Math.cos(r)*CFG.BALL_RADIUS*0.84, CFG.BALL_RADIUS*0.46, Math.sin(r)*CFG.BALL_RADIUS*0.84);
-      ballGroup.add(patch);
-    });
-    ballGroup.add(ballSphere);
-    ballGroup.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
-    ballGroup.castShadow = true;
-    gameGroup.add(ballGroup);
-    ballMesh = ballGroup;
-    El.splashBar.style.width='25%';
+    // ── Step 2: Load ball (bola.glb) ──────────────────────────────────
+    const bolaGLB = await loadGLTFWithProgress('assets/bola.glb', '⚽ Loading ball', 18, 35);
+    normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
+    fixFBXMaterials(bolaGLB);
+    bolaGLB.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
+    bolaGLB.castShadow = true;
+    bolaGLB.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    gameGroup.add(bolaGLB);
+    ballMesh = bolaGLB;
+    El.splashBar.style.width='35%';
 
     // ── Step 3: Load goalpost ──────────────────────────────────────────
-    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', '🥅 Loading goalpost', 25, 40);
+    const gawangGLB = await loadGLTFWithProgress('assets/gawang.glb', '🥅 Loading goalpost', 35, 52);
     normalizeFBXByHeight(gawangGLB, CFG.GOAL_H);
     gawangGLB.position.set(0, 0, CFG.GOAL_Z);
     fixFBXMaterials(gawangGLB);
@@ -1083,7 +1116,7 @@ async function boot() {
     gawangMesh = gawangGLB;
 
     // ── Step 4: Load Goalkeeper ────────────────────────────────────────
-    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', '🧄 Loading Goalkeeper', 40, 90);
+    const keeperGLB = await loadGLTFWithProgress('assets/Goalkeeper.glb', '🧤 Loading Goalkeeper', 52, 95);
     const keeperBox = new THREE.Box3().setFromObject(keeperGLB);
     const keeperSize = new THREE.Vector3();
     keeperBox.getSize(keeperSize);
