@@ -4,8 +4,8 @@
  */
 "use strict";
 
-const APP_VERSION = '2.0.0-dev'; // staging build
-const APP_ENV    = 'staging';
+const APP_VERSION = '2.0.0';
+const APP_ENV    = 'production';
 
 import * as THREE from 'three';
 window.THREE = THREE; // Provide global THREE for XR8
