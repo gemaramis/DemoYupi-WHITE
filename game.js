@@ -17,8 +17,8 @@ const CFG = {
   TIME_LIMIT: 60, POINTS_PER_GOAL: 100,
   // Goal & gameplay sizing (tabletop AR — ~1:6 real-world scale)
   GOAL_W: 1.6, GOAL_H: 0.55, GOAL_Z: -1.5,
-  BALL_Y: 0.06, BALL_Z: 0.30,
-  BALL_RADIUS: 0.16,
+  BALL_Y: 0.11, BALL_Z: 0.30,
+  BALL_RADIUS: 0.11,
   KEEPER_PATROL: 0.60, KEEPER_CYCLE: 2.2,
   SHOOT_MS: 750, MAX_SWIPE: 180, TRAJ_DOTS: 7,
   // Surface detection
