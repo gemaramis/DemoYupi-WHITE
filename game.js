@@ -1175,17 +1175,24 @@ async function boot() {
       mainBallMesh.removeFromParent();
       mainBallMesh.position.set(0,0,0);
       mainBallMesh.rotation.set(0,0,0);
+      
       // Scale to desired diameter
       const bbox = new THREE.Box3().setFromObject(mainBallMesh);
       const bsize = new THREE.Vector3(); bbox.getSize(bsize);
-      const ballDiam = CFG.BALL_RADIUS * 2.2;
-      const s = ballDiam / Math.max(bsize.x, bsize.y, bsize.z, 0.001);
+      
+      // Calculate max dimension of the imported mesh
+      const maxDim = Math.max(bsize.x, bsize.y, bsize.z, 0.001);
+      
+      // Scale it so its diameter matches 2 * CFG.BALL_RADIUS
+      const targetDiam = CFG.BALL_RADIUS * 2.0; 
+      const s = targetDiam / maxDim;
+      
       mainBallMesh.scale.setScalar(s);
       mainBallMesh.castShadow = true;
       ballGroup.add(mainBallMesh);
     } else {
       // Fallback: use whole GLB if no individual mesh found
-      normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.2);
+      normalizeFBXByHeight(bolaGLB, CFG.BALL_RADIUS * 2.0);
       ballGroup.add(bolaGLB);
     }
     ballGroup.position.set(0, CFG.BALL_Y, CFG.BALL_Z);
